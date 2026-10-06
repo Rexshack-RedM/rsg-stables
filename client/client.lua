@@ -260,7 +260,7 @@ local function startPreviewCam(entity)
     end)
 end
 
-local function spawnPreviewPed(model, previewCoords, outfitNum, tack)
+local function spawnPreviewPed(model, previewCoords, outfitNum, tack, coat)
     if previewPed and DoesEntityExist(previewPed) then
         DeleteEntity(previewPed)
     end
@@ -296,13 +296,14 @@ local function spawnPreviewPed(model, previewCoords, outfitNum, tack)
     previewPed = entity
     initAndApplyOutfit(entity, outfitNum or 0)
     applyTackTable(entity, tack)
+    if coat then HorseCoat.Apply(entity, coat) end
 
     return entity
 end
 
-local function spawnPreviewHorse(model, previewCoords, outfitNum, tack)
+local function spawnPreviewHorse(model, previewCoords, outfitNum, tack, coat)
     despawnPreviewHorse()
-    local entity = spawnPreviewPed(model, previewCoords, outfitNum, tack)
+    local entity = spawnPreviewPed(model, previewCoords, outfitNum, tack, coat)
     if entity then
         startPreviewCam(entity)
     end
@@ -735,6 +736,7 @@ local function spawnHorse(horse, coords)
     end
     initAndApplyOutfit(horsePed, math.floor(tonumber(horse.outfit) or 0))
     applyTackTable(horsePed, decodeTack(horse.tack))
+    if horse.coat and horse.coat ~= '' then HorseCoat.Apply(horsePed, horse.coat) end
     SetEntityAsMissionEntity(horsePed, true, true)
     SetBlockingOfNonTemporaryEvents(horsePed, true)
     SetPedCanBeTargetted(horsePed, false)
@@ -999,10 +1001,11 @@ local currentHandlers = {}
 local pendingInputSubmit, pendingInputCancel = nil, nil
 local pendingAlertClose = nil
 local currentTackHandlers = nil
+local currentCoatHandlers = nil
 
 -- UI (NUI) strings are sent to the page from locales/*.json (ui_* keys)
 local nuiLocaleSent = false
-local UI_LOCALE_KEYS = { 'ui_stable', 'ui_back', 'ui_close', 'ui_prev_style', 'ui_next_style', 'ui_tack_hint', 'ui_rotate_zoom_hint', 'ui_total_spend', 'ui_insufficient_funds', 'ui_prev_category', 'ui_next_category', 'ui_review_apply', 'ui_input', 'ui_cancel', 'ui_confirm', 'ui_notice', 'ui_understood', 'ui_horse_stats' }
+local UI_LOCALE_KEYS = { 'ui_stable', 'ui_back', 'ui_close', 'ui_prev_style', 'ui_next_style', 'ui_tack_hint', 'ui_rotate_zoom_hint', 'ui_total_spend', 'ui_insufficient_funds', 'ui_prev_category', 'ui_next_category', 'ui_review_apply', 'ui_input', 'ui_cancel', 'ui_confirm', 'ui_notice', 'ui_understood', 'ui_horse_stats', 'ui_coat_main', 'ui_coat_markings', 'ui_coat_nose', 'ui_coat_mane', 'ui_coat_tail', 'ui_coat_none', 'ui_coat_default', 'ui_coat_presets', 'ui_coat_apply', 'ui_coat_reset', 'ui_coat_no_change' }
 
 local function SendNuiLocale()
     if nuiLocaleSent then return end
@@ -1029,6 +1032,7 @@ end
 local function NuiRender(screen)
     currentHandlers = {}
     currentTackHandlers = nil
+    currentCoatHandlers = nil
     local opts = {}
     for i, o in ipairs(screen.options) do
         local id = tostring(i)
@@ -1102,6 +1106,33 @@ local function NuiTackPicker(data)
     })
 end
 
+local function NuiCoatPicker(data)
+    currentHandlers = {}
+    currentTackHandlers = nil
+    OpenNUI()
+    SendNUIMessage({
+        action = 'coatPicker',
+        title = data.title,
+        subtitle = data.subtitle,
+        coat = data.coat,
+        price = data.price,
+        canAfford = data.canAfford,
+        hasCustom = data.hasCustom,
+        presets = data.presets,
+    })
+end
+
+RegisterNUICallback('coatUpdate', function(data, cb)
+    if currentCoatHandlers and currentCoatHandlers.update then currentCoatHandlers.update(data) end
+    cb('ok')
+end)
+
+RegisterNUICallback('coatAction', function(data, cb)
+    cb('ok')
+    local fn = currentCoatHandlers and currentCoatHandlers[data.action]
+    if fn and (data.action == 'apply' or data.action == 'reset' or data.action == 'cancel') then fn() end
+end)
+
 RegisterNUICallback('select', function(data, cb)
     local fn = currentHandlers[data.id]
     if fn then fn() end
@@ -1160,6 +1191,7 @@ RegisterNUICallback('close', function(data, cb)
     CloseNUI()
     despawnPreviewHorse()
     currentTackHandlers = nil
+    currentCoatHandlers = nil
     cb('ok')
 end)
 
@@ -1608,7 +1640,7 @@ end
 
 local function refreshTackPreview(stable, horse, baseTack, selections)
     if not (previewPed and DoesEntityExist(previewPed)) then return end
-    spawnPreviewPed(horse.model, stable.previewCoords, horse.outfit, buildPreviewTack(baseTack, selections))
+    spawnPreviewPed(horse.model, stable.previewCoords, horse.outfit, buildPreviewTack(baseTack, selections), horse.coat)
 end
 
 local function currentPick(baseTack, selections, key)
@@ -1790,8 +1822,76 @@ function OpenTackMenu(stable, horse)
     end
     local baseTack = decodeTack(horse.tack)
     local selections = {}
-    spawnPreviewHorse(horse.model, stable.previewCoords, horse.outfit, baseTack)
+    spawnPreviewHorse(horse.model, stable.previewCoords, horse.outfit, baseTack, horse.coat)
     showTackWizardStep(stable, horse, baseTack, selections, 1)
+end
+
+-- ===================== COAT MENU =====================
+function OpenCoatMenu(stable, horse)
+    if not (Config.Coat and Config.Coat.enabled) then
+        NuiNotify(locale('coat_disabled'), 'error')
+        return
+    end
+
+    -- spawn without the saved coat first so we can read the horse's natural colours
+    spawnPreviewHorse(horse.model, stable.previewCoords, horse.outfit, decodeTack(horse.tack))
+    local ped = previewPed
+    if not (ped and DoesEntityExist(ped)) then return end
+    local timeout = GetGameTimer() + 3000
+    while DoesEntityExist(ped) and not Citizen.InvokeNative(0xA0BC8FAED8CFEB3C, ped) and GetGameTimer() < timeout do Wait(50) end
+
+    local natural = HorseCoat.Read(ped)
+    local saved = HorseCoat.Normalize(horse.coat)
+    if saved then HorseCoat.Apply(ped, saved) end
+    local current = saved or natural
+
+    local function back()
+        currentCoatHandlers = nil
+        despawnPreviewHorse()
+        OpenHorseMenu(stable, horse)
+    end
+
+    currentCoatHandlers = {
+        update = function(data)
+            local coat = HorseCoat.Normalize(data)
+            if coat and previewPed and DoesEntityExist(previewPed) then
+                current = coat
+                HorseCoat.ApplyNow(previewPed, current)
+            end
+        end,
+        apply = function()
+            local ok, result = lib.callback.await('rsg-stables:server:applyHorseCoat', false, horse.id, current)
+            if ok then
+                horse.coat = json.encode(result.coat)
+                NuiNotify(locale('coat_updated', result.charged or 0), 'success')
+                back()
+            else
+                NuiNotify(result or locale('coat_failed'), 'error')
+            end
+        end,
+        reset = function()
+            local ok, result = lib.callback.await('rsg-stables:server:applyHorseCoat', false, horse.id, 'reset')
+            if ok then
+                horse.coat = nil
+                NuiNotify(locale('coat_reset'), 'success')
+                back()
+            else
+                NuiNotify(result or locale('coat_failed'), 'error')
+            end
+        end,
+        cancel = back,
+    }
+
+    local price = tonumber(Config.Coat.price) or 0
+    NuiCoatPicker({
+        title = locale('customize_coat'),
+        subtitle = horse.name,
+        coat = current,
+        price = price,
+        canAfford = getBuyFunds() >= price,
+        hasCustom = saved ~= nil,
+        presets = Config.Coat.presets or {},
+    })
 end
 
 function OpenHorseMenu(stable, horse)
@@ -1827,6 +1927,17 @@ function OpenHorseMenu(stable, horse)
                 icon = 'shirt',
                 onSelect = function()
                     OpenTackMenu(stable, horse)
+                end,
+            })
+        end
+
+        if Config.Coat and Config.Coat.enabled then
+            table.insert(options, {
+                title = locale('customize_coat'),
+                description = locale('customize_coat_desc', tonumber(Config.Coat.price) or 0),
+                icon = 'brush',
+                onSelect = function()
+                    OpenCoatMenu(stable, horse)
                 end,
             })
         end

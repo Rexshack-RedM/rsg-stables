@@ -1523,6 +1523,34 @@ Config.Tack = {
     enabled = true, -- set false to hide "Customize Tack" entirely
 }
 
+-- Horse coat colours (custom tint system, adapted from rsg-horses)
+-- tint0 = main coat (0-254), tint1 = markings (0-255, 255 = none), tint2 = nose (0-255, 255 = default)
+-- mane / tail = 0-254. Applied with SetMetaPedTag on the metaped_tint_horse palette.
+Config.Coat = {
+    enabled = true, -- set false to hide "Customize Coat"
+    price   = 100,  -- flat fee whenever any colour changes (restoring the natural coat is free)
+    presets = {     -- quick-pick main coat colours shown in the editor
+        { label = 'White',        tint0 = 0 },
+        { label = 'Black',        tint0 = 9 },
+        { label = 'Brown',        tint0 = 40 },
+        { label = 'Bay',          tint0 = 100 },
+        { label = 'Chestnut Red', tint0 = 127 },
+        { label = 'Silver',       tint0 = 128 },
+        { label = 'Grey',         tint0 = 130 },
+        { label = 'Bronze',       tint0 = 121 },
+        { label = 'Blood Red',    tint0 = 125 },
+        { label = 'Orange',       tint0 = 120 },
+        { label = 'Yellow',       tint0 = 119 },
+        { label = 'Lime',         tint0 = 115 },
+        { label = 'Green',        tint0 = 112 },
+        { label = 'Dark Green',   tint0 = 109 },
+        { label = 'Blue',         tint0 = 110 },
+        { label = 'Purple',       tint0 = 105 },
+        { label = 'Pink',         tint0 = 107 },
+        { label = 'Lilac',        tint0 = 108 },
+    },
+}
+
 Config.TackCategories = {
     { key = 'blanket',    label = 'Blanket' },
     { key = 'saddle',     label = 'Saddle' },

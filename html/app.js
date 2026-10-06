@@ -18,7 +18,18 @@
     "ui_confirm": "Confirm",
     "ui_notice": "Notice",
     "ui_understood": "Understood",
-    "ui_horse_stats": "Horse Stats"
+    "ui_horse_stats": "Horse Stats",
+    "ui_coat_main": "Coat Colour",
+    "ui_coat_markings": "Markings",
+    "ui_coat_nose": "Nose",
+    "ui_coat_mane": "Mane",
+    "ui_coat_tail": "Tail",
+    "ui_coat_none": "None",
+    "ui_coat_default": "Default",
+    "ui_coat_presets": "Presets",
+    "ui_coat_apply": "Apply — $%s",
+    "ui_coat_reset": "Restore Natural",
+    "ui_coat_no_change": "No changes"
   };
   function t(key, ...args) {
     let s = I18N[key] !== undefined ? String(I18N[key]) : key;
@@ -66,6 +77,13 @@
   const tackNextCategoryBtn = document.getElementById('tackNextCategory');
   const tackCostTotalEl = document.getElementById('tackCostTotal');
 
+  const coatPickerEl = document.getElementById('coatPicker');
+  const coatPresetsEl = document.getElementById('coatPresets');
+  const coatRowsEl = document.getElementById('coatRows');
+  const coatCostEl = document.getElementById('coatCost');
+  const coatApplyBtn = document.getElementById('coatApplyBtn');
+  const coatResetBtn = document.getElementById('coatResetBtn');
+
   // 'list' for the generic option-list screen, 'tackPicker' for the arrow-cycling tack style
   // screen. Drives which element is visible and how Left/Right/Up/Down keys are interpreted.
   let activeScreen = 'list';
@@ -83,7 +101,7 @@
   const ICONS = {
     dollar: '$', heart: '♥', foal: 'F', horse: 'H', pen: '✎',
     shield: 'S', route: '⇄', medkit: '+', retrieve: '↑', shirt: '↻',
-    xmark: '✕', filter: '⧩',
+    xmark: '✕', filter: '⧩', brush: '✐',
   };
 
   function iconGlyph(key) {
@@ -101,6 +119,7 @@
     alertModal.classList.add('hidden');
     statsModal.classList.add('hidden');
     tackPickerEl.classList.add('hidden');
+    coatPickerEl.classList.add('hidden');
     panelHintEl.classList.add('hidden');
     activeScreen = 'list';
   }
@@ -117,6 +136,7 @@
     panelEl.classList.remove('hidden');
     activeScreen = 'list';
     tackPickerEl.classList.add('hidden');
+    coatPickerEl.classList.add('hidden');
     optionsListEl.classList.remove('hidden');
 
     panelTitleEl.textContent = screen.title || '';
@@ -216,6 +236,7 @@
     panelEl.classList.remove('hidden');
     activeScreen = 'tackPicker';
     optionsListEl.classList.add('hidden');
+    coatPickerEl.classList.add('hidden');
     tackPickerEl.classList.remove('hidden');
 
     panelTitleEl.textContent = `${data.title || ''} (${data.categoryIndex}/${data.categoryCount})`;
@@ -247,6 +268,159 @@
 
     tackNextCategoryBtn.textContent = data.isLast ? t('ui_review_apply') : t('ui_next_category');
   }
+
+  // ---------------- Coat picker ----------------
+  const COAT_FIELDS = [
+    { key: 'tint0', label: 'ui_coat_main', max: 254 },
+    { key: 'tint1', label: 'ui_coat_markings', max: 255, special: 255, specialLabel: 'ui_coat_none' },
+    { key: 'tint2', label: 'ui_coat_nose', max: 255, special: 255, specialLabel: 'ui_coat_default' },
+    { key: 'mane', label: 'ui_coat_mane', max: 254 },
+    { key: 'tail', label: 'ui_coat_tail', max: 254 },
+  ];
+  let coatState = null;
+  let coatInitial = null;
+  let coatMeta = { price: 0, canAfford: true, hasCustom: false };
+  let coatSendTimer = null;
+  const coatInputs = {};
+
+  function coatChanged() {
+    return COAT_FIELDS.some((f) => coatState[f.key] !== coatInitial[f.key]);
+  }
+
+  function coatValueText(field, v) {
+    return field.special !== undefined && v === field.special ? t(field.specialLabel) : String(v);
+  }
+
+  function refreshCoatFooter() {
+    const changed = coatChanged();
+    const price = coatMeta.price || 0;
+    if (!changed) {
+      coatCostEl.textContent = t('ui_coat_no_change');
+      coatCostEl.classList.remove('affordable', 'over-budget');
+    } else {
+      coatCostEl.textContent = coatMeta.canAfford
+        ? t('ui_total_spend', price)
+        : `${t('ui_total_spend', price)} — ${t('ui_insufficient_funds')}`;
+      coatCostEl.classList.toggle('affordable', !!coatMeta.canAfford);
+      coatCostEl.classList.toggle('over-budget', !coatMeta.canAfford);
+    }
+    coatApplyBtn.textContent = t('ui_coat_apply', price);
+    coatApplyBtn.disabled = !changed || !coatMeta.canAfford;
+    coatResetBtn.disabled = !coatMeta.hasCustom;
+  }
+
+  // Throttle preview updates so dragging a slider doesn't flood the client
+  function queueCoatUpdate() {
+    if (coatSendTimer) return;
+    coatSendTimer = setTimeout(() => {
+      coatSendTimer = null;
+      post('coatUpdate', coatState);
+    }, 60);
+  }
+
+  function setCoatValue(key, value) {
+    coatState[key] = value;
+    const ui = coatInputs[key];
+    if (ui) {
+      ui.range.value = value;
+      ui.value.textContent = coatValueText(ui.field, value);
+    }
+    refreshCoatFooter();
+    queueCoatUpdate();
+  }
+
+  function renderCoatPicker(data) {
+    closeModals();
+    showApp();
+    panelEl.classList.remove('hidden');
+    activeScreen = 'coatPicker';
+    optionsListEl.classList.add('hidden');
+    tackPickerEl.classList.add('hidden');
+    coatPickerEl.classList.remove('hidden');
+
+    panelTitleEl.textContent = data.title || '';
+    panelSubtitleEl.textContent = data.subtitle || '';
+    panelHintEl.textContent = t('ui_rotate_zoom_hint');
+    panelHintEl.classList.remove('hidden');
+
+    backBtn.classList.remove('hidden');
+    backBtn.onclick = () => post('coatAction', { action: 'cancel' });
+
+    coatState = Object.assign({}, data.coat);
+    coatInitial = Object.assign({}, data.coat);
+    coatMeta = { price: data.price || 0, canAfford: !!data.canAfford, hasCustom: !!data.hasCustom };
+
+    coatPresetsEl.innerHTML = '';
+    (data.presets || []).forEach((p) => {
+      const chip = document.createElement('button');
+      chip.className = 'coat-preset';
+      chip.textContent = p.label;
+      chip.addEventListener('click', () => setCoatValue('tint0', Number(p.tint0) || 0));
+      coatPresetsEl.appendChild(chip);
+    });
+
+    coatRowsEl.innerHTML = '';
+    COAT_FIELDS.forEach((field) => {
+      const row = document.createElement('div');
+      row.className = 'coat-row';
+
+      const head = document.createElement('div');
+      head.className = 'coat-row-head';
+      const label = document.createElement('span');
+      label.textContent = t(field.label);
+      const value = document.createElement('span');
+      value.className = 'coat-row-value';
+      head.appendChild(label);
+      head.appendChild(value);
+
+      const ctrl = document.createElement('div');
+      ctrl.className = 'coat-row-ctrl';
+      const dec = document.createElement('button');
+      dec.className = 'chevron-btn coat-step';
+      dec.innerHTML = '&#10094;';
+      const range = document.createElement('input');
+      range.type = 'range';
+      range.min = 0;
+      range.max = field.max;
+      range.step = 1;
+      range.className = 'coat-range';
+      const inc = document.createElement('button');
+      inc.className = 'chevron-btn coat-step';
+      inc.innerHTML = '&#10095;';
+
+      const step = (d) => {
+        let v = (coatState[field.key] || 0) + d;
+        if (v < 0) v = field.max;
+        if (v > field.max) v = 0;
+        setCoatValue(field.key, v);
+      };
+      dec.addEventListener('click', () => step(-1));
+      inc.addEventListener('click', () => step(1));
+      range.addEventListener('input', () => setCoatValue(field.key, Number(range.value)));
+
+      ctrl.appendChild(dec);
+      ctrl.appendChild(range);
+      ctrl.appendChild(inc);
+      row.appendChild(head);
+      row.appendChild(ctrl);
+      coatRowsEl.appendChild(row);
+
+      coatInputs[field.key] = { field, range, value };
+      range.value = coatState[field.key];
+      value.textContent = coatValueText(field, coatState[field.key]);
+    });
+
+    refreshCoatFooter();
+  }
+
+  coatApplyBtn.addEventListener('click', () => {
+    if (coatApplyBtn.disabled) return;
+    post('coatUpdate', coatState).then(() => post('coatAction', { action: 'apply' }));
+  });
+  coatResetBtn.addEventListener('click', () => {
+    if (coatResetBtn.disabled) return;
+    post('coatAction', { action: 'reset' });
+  });
 
   tackPrevStyleBtn.addEventListener('click', () => post('tackCycle', { dir: 'left' }));
   tackNextStyleBtn.addEventListener('click', () => post('tackCycle', { dir: 'right' }));
@@ -380,6 +554,16 @@
 
     // On the tack style picker, Left/Right cycle styles and Up/Down/Enter move
     // between categories instead of rotating the preview camera.
+    // Coat editor: sliders own the arrow keys, A/D still rotate the preview
+    if (activeScreen === 'coatPicker') {
+      if (e.key === 'a' || e.key === 'A') {
+        post('rotateCam', { dir: 'left' });
+      } else if (e.key === 'd' || e.key === 'D') {
+        post('rotateCam', { dir: 'right' });
+      }
+      return;
+    }
+
     if (activeScreen === 'tackPicker') {
       if (e.key === 'ArrowLeft') {
         post('tackCycle', { dir: 'left' });
@@ -408,7 +592,7 @@
   });
 
   document.addEventListener('keyup', (e) => {
-    if (activeScreen === 'tackPicker') {
+    if (activeScreen === 'tackPicker' || activeScreen === 'coatPicker') {
       if (e.key === 'a' || e.key === 'A' || e.key === 'd' || e.key === 'D') {
         post('rotateCam', { dir: null });
       }
@@ -445,6 +629,9 @@
         break;
       case 'tackPicker':
         renderTackPicker(data);
+        break;
+      case 'coatPicker':
+        renderCoatPicker(data);
         break;
       case 'inputDialog':
         showInputDialog(data);

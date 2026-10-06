@@ -19,6 +19,7 @@ server_scripts {
 
 client_scripts {
     'client/dataview.lua',
+    'client/coat.lua',
     'client/client.lua',
     'client/horseinfo.lua',
 }

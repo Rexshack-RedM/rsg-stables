@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS `rsg_stables_horses` (
   `name` VARCHAR(50) NOT NULL DEFAULT 'Unnamed Horse',
   `outfit` INT(11) NOT NULL DEFAULT 0,
   `tack` TEXT DEFAULT NULL,
+  `coat` TEXT DEFAULT NULL,
   `health` FLOAT NOT NULL DEFAULT 100,
   `stamina` FLOAT NOT NULL DEFAULT 100,
   `hunger` FLOAT NOT NULL DEFAULT 100,
@@ -79,6 +80,13 @@ local function ensureDatabase()
             if not okCol then
                 print(('^1[rsg-stables] Failed to add column %s: %s^7'):format(col, tostring(errCol)))
             end
+        end
+    end
+
+    if not existing.coat then
+        local okCoat, errCoat = pcall(MySQL.query.await, 'ALTER TABLE `rsg_stables_horses` ADD COLUMN `coat` TEXT DEFAULT NULL AFTER `tack`')
+        if not okCoat then
+            print(('^1[rsg-stables] Failed to add column coat: %s^7'):format(tostring(errCoat)))
         end
     end
 
@@ -781,6 +789,77 @@ lib.callback.register('rsg-stables:server:applyHorseTack', function(source, hors
 
         MySQL.update.await('UPDATE rsg_stables_horses SET tack = ? WHERE id = ?', { json.encode(tack), horseId })
         return true, { tack = tack, charged = total }
+    end)
+end)
+
+-- ===================== COAT =====================
+
+local COAT_LIMITS = { tint0 = 254, tint1 = 255, tint2 = 255, mane = 254, tail = 254 }
+
+local function normalizeCoat(raw)
+    if type(raw) == 'string' then
+        local ok, decoded = pcall(json.decode, raw)
+        raw = ok and decoded or nil
+    end
+    if type(raw) ~= 'table' then return nil end
+    local coat = {}
+    for key, max in pairs(COAT_LIMITS) do
+        local v = tonumber(raw[key])
+        if not v then return nil end
+        v = math.floor(v)
+        if v < 0 or v > max then return nil end
+        coat[key] = v
+    end
+    return coat
+end
+
+local function sameCoat(a, b)
+    if not a or not b then return false end
+    for key in pairs(COAT_LIMITS) do
+        if a[key] ~= b[key] then return false end
+    end
+    return true
+end
+
+-- rawCoat = { tint0, tint1, tint2, mane, tail } or the string 'reset' to restore the natural coat
+lib.callback.register('rsg-stables:server:applyHorseCoat', function(source, horseId, rawCoat)
+    if not (Config.Coat and Config.Coat.enabled) then return false, locale('coat_disabled') end
+
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player then return false, locale('player_not_found') end
+    horseId = toId(horseId)
+    if not horseId then return false, locale('horse_not_found') end
+
+    local reset = rawCoat == 'reset'
+    local coat = not reset and normalizeCoat(rawCoat) or nil
+    if not reset and not coat then return false, locale('invalid_coat') end
+
+    return withLock('citizen:' .. Player.PlayerData.citizenid, function()
+        local horse = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', {
+            horseId, Player.PlayerData.citizenid
+        })
+        if not horse then return false, locale('horse_not_found') end
+        if not isTrue(horse.alive) then return false, locale('horse_is_dead') end
+        if isTrue(horse.active) then return false, locale('store_horse_first') end
+        if not nearStableByName(source, horse.stable) then return false, locale('not_close_to_stable') end
+
+        if reset then
+            if not horse.coat or horse.coat == '' then return false, locale('no_coat_changes') end
+            MySQL.update.await('UPDATE rsg_stables_horses SET coat = NULL WHERE id = ?', { horseId })
+            return true, { coat = nil, charged = 0 }
+        end
+
+        if sameCoat(coat, normalizeCoat(horse.coat)) then
+            return false, locale('no_coat_changes')
+        end
+
+        local price = tonumber(Config.Coat.price) or 0
+        if price > 0 and not chargePlayer(Player, price) then
+            return false, locale('insufficient_funds')
+        end
+
+        MySQL.update.await('UPDATE rsg_stables_horses SET coat = ? WHERE id = ?', { json.encode(coat), horseId })
+        return true, { coat = coat, charged = price }
     end)
 end)
 
