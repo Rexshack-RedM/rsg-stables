@@ -1,0 +1,2054 @@
+local RSGCore = exports['rsg-core']:GetCoreObject()
+lib.locale()
+
+local stablePeds = {}
+local activeHorse = nil -- { entity = int, dbId = int, maxhealth = int, snapshot = table, hunger = num, thirst = num }
+local horseBlip = nil
+local pendingHorse = nil -- horse that is 'out' in the DB but has no entity (fled, or restored after relog); whistle recalls it
+local recallPendingHorse
+local NuiStatsDialog
+local CARE_COOLDOWN = 60000 -- ms; mirrors server.lua's CARE_COOLDOWN (client-side cooldown is UX only, server enforces the real limit)
+local HORSE_TARGETS = { 'rsg_stables_feed', 'rsg_stables_water', 'rsg_stables_brush', 'rsg_stables_stats', 'rsg_stables_store', 'rsg_stables_flee' }
+
+local function healthPctOf(entity)
+    return math.floor((GetEntityHealth(entity) / math.max(1, GetEntityMaxHealth(entity))) * 100)
+end
+
+local function staminaPctOf(entity, default)
+    return math.floor(tonumber(Citizen.InvokeNative(0x36731AC041289BB1, entity, 1)) or default or 0) -- _GET_ATTRIBUTE_CORE_VALUE (stamina)
+end
+
+-- ===================== UTIL =====================
+
+local function loadModel(model)
+    local hash
+    if type(model) == 'string' then
+        hash = tonumber(model) or joaat(model)
+    else
+        hash = model
+    end
+    if not IsModelValid(hash) then
+        print(('[rsg-stables] WARNING: invalid model "%s" (hash %s) — check the spelling in config.lua'):format(tostring(model), tostring(hash)))
+        return nil
+    end
+    RequestModel(hash)
+    local timeout = 0
+    while not HasModelLoaded(hash) and timeout < 5000 do
+        Wait(50)
+        timeout = timeout + 50
+    end
+    if not HasModelLoaded(hash) then
+        print(('[rsg-stables] WARNING: model "%s" did not stream in within 5s'):format(tostring(model)))
+        return nil
+    end
+    return hash
+end
+
+-- ===================== TACK =====================
+local function applyTackItem(entity, itemHash)
+    itemHash = tonumber(itemHash)
+    if not itemHash or itemHash == 0 then return end
+    Citizen.InvokeNative(0xD3A7B003ED343FD9, entity, itemHash, true, true, true)
+end
+
+local function applyTackTable(entity, tack)
+    if not tack then return end
+    for _, category in ipairs(Config.TackCategories) do
+        local hash = tack[category.key]
+        if hash then applyTackItem(entity, hash) end
+    end
+end
+
+local function decodeTack(raw)
+    if not raw or raw == '' then return {} end
+    local ok, t = pcall(json.decode, raw)
+    if ok and type(t) == 'table' then return t end
+    return {}
+end
+
+local tackItemIndex = {}
+for categoryKey, items in pairs(Config.TackItems) do
+    tackItemIndex[categoryKey] = {}
+    for _, item in ipairs(items) do
+        tackItemIndex[categoryKey][tostring(item.hash)] = item
+    end
+end
+
+local function getTackItem(categoryKey, hash)
+    local byHash = tackItemIndex[categoryKey]
+    if not byHash then return nil end
+    return byHash[tostring(hash)]
+end
+
+local function tackItemLabel(categoryKey, hash)
+    if not hash or hash == 0 then return locale('none') end
+    local item = getTackItem(categoryKey, hash)
+    return item and item.label or locale('none')
+end
+
+-- blip function
+local function AddLocationBlip(x, y, z, sprite, color, scale, label)
+    local blip = BlipAddForCoords(1664425300, x, y, z)
+    SetBlipSprite(blip, joaat(sprite), true)
+    SetBlipScale(blip, scale)
+    BlipAddModifier(blip, joaat(color))
+    SetBlipName(blip, label)
+    return blip
+end
+
+local function fmtTimeLeft(readyAt)
+    local msLeft = readyAt - (os.time() * 1000)
+    if msLeft <= 0 then return locale('time_ready') end
+    local mins = math.ceil(msLeft / 60000)
+    return locale('time_minutes', mins)
+end
+
+-- ===================== HORSE SPAWN / DESPAWN =====================
+
+local function despawnActiveHorseEntity()
+    if activeHorse and activeHorse.entity and DoesEntityExist(activeHorse.entity) then
+        pcall(function()
+            exports.ox_target:removeLocalEntity(activeHorse.entity, HORSE_TARGETS)
+        end)
+        DeleteEntity(activeHorse.entity)
+    end
+    if horseBlip and DoesBlipExist(horseBlip) then
+        RemoveBlip(horseBlip)
+    end
+    horseBlip = nil
+    activeHorse = nil
+end
+
+local function whistleActiveHorse()
+    if not (activeHorse and activeHorse.entity and DoesEntityExist(activeHorse.entity)) then return end
+    if IsEntityDead(activeHorse.entity) then return end
+
+    local entity = activeHorse.entity
+    local playerPed = PlayerPedId()
+
+    if IsPedOnSpecificMount and IsPedOnSpecificMount(playerPed, entity) then return end
+
+    local playerCoords = GetEntityCoords(playerPed)
+    local horseCoords = GetEntityCoords(entity)
+    local distance = #(playerCoords - horseCoords)
+
+    if distance > Config.WhistleTeleportDistance then
+        local heading = GetEntityHeading(playerPed)
+        local rad = math.rad(-heading)
+        local x = playerCoords.x + 5.0 * math.sin(rad)
+        local y = playerCoords.y + 5.0 * math.cos(rad)
+        SetEntityCoords(entity, x, y, playerCoords.z, false, false, false, true)
+        SetEntityHeading(entity, heading + 180.0)
+    else
+        ClearPedTasks(entity)
+        TaskGoToEntity(entity, playerPed, -1, 2.5, 1.5, 0, 0)
+        SetPedKeepTask(entity, true)
+    end
+end
+
+local function pollWhistle()
+    if activeHorse then
+        if IsControlJustPressed(0, `INPUT_WHISTLE`) then
+            whistleActiveHorse()
+        end
+    elseif pendingHorse then
+        if IsControlJustPressed(0, `INPUT_WHISTLE`) and recallPendingHorse and not IsPedDeadOrDying(cache.ped, true) then
+            recallPendingHorse()
+        end
+    end
+end
+
+-- ===================== PREVIEW HORSE =====================
+
+local previewPed = nil
+local previewCam = nil
+local previewCamActive = false
+local previewRotateDir = nil
+local previewZoomDelta = 0.0
+local previewRadius = 3.5
+local PREVIEW_RADIUS_MIN = 1.5
+local PREVIEW_RADIUS_MAX = 7.0
+
+RegisterNUICallback('rotateCam', function(data, cb)
+    previewRotateDir = data and data.dir or nil
+    cb('ok')
+end)
+
+RegisterNUICallback('zoomCam', function(data, cb)
+    local dir = data and data.dir or 0
+    previewZoomDelta = previewZoomDelta + (dir * 0.35)
+    cb('ok')
+end)
+
+local function applyOutfit(entity, outfitNum)
+    Citizen.InvokeNative(0x77FF8D35EEC6BBC4, entity, outfitNum, true)
+end
+
+local function initAndApplyOutfit(entity, outfitNum)
+    Citizen.InvokeNative(0x45EEE61580806D63, entity)
+    Wait(150)
+    if DoesEntityExist(entity) then
+        applyOutfit(entity, outfitNum)
+    end
+end
+
+local function destroyPreviewCam()
+    previewCamActive = false
+    previewRotateDir = nil
+    if previewCam then
+        RenderScriptCams(false, true, 500, true, true)
+        if DoesCamExist(previewCam) then DestroyCam(previewCam, false) end
+        previewCam = nil
+    end
+    local ped = PlayerPedId()
+    if DoesEntityExist(ped) then
+        FreezeEntityPosition(ped, false)
+    end
+end
+
+local function despawnPreviewHorse()
+    destroyPreviewCam()
+    if previewPed and DoesEntityExist(previewPed) then
+        DeleteEntity(previewPed)
+    end
+    previewPed = nil
+end
+
+local function startPreviewCam(entity)
+    local coords = GetEntityCoords(entity)
+
+    previewCam = CreateCam('DEFAULT_SCRIPTED_CAMERA', true)
+    SetCamActive(previewCam, true)
+    RenderScriptCams(true, true, 500, true, true)
+    FreezeEntityPosition(PlayerPedId(), true)
+    previewCamActive = true
+    previewRotateDir = nil
+    previewZoomDelta = 0.0
+    previewRadius = 3.5
+
+    CreateThread(function()
+        local angle = 0.0
+        local height = 1.3
+        local rotateSpeed = 60.0 -- degrees per second while holding a rotate control
+
+        while previewCamActive and previewCam and DoesCamExist(previewCam) do
+            local frameTime = GetFrameTime()
+            local delta = rotateSpeed * frameTime
+
+            if previewRotateDir == 'left' then
+                angle = angle - delta
+            elseif previewRotateDir == 'right' then
+                angle = angle + delta
+            end
+            angle = angle % 360.0
+
+            if previewZoomDelta ~= 0.0 then
+                previewRadius = math.max(PREVIEW_RADIUS_MIN, math.min(PREVIEW_RADIUS_MAX, previewRadius + previewZoomDelta))
+                previewZoomDelta = 0.0
+            end
+
+            local rad = math.rad(angle)
+            local camX = coords.x + math.cos(rad) * previewRadius
+            local camY = coords.y + math.sin(rad) * previewRadius
+            local camZ = coords.z + height
+
+            SetCamCoord(previewCam, camX, camY, camZ)
+            PointCamAtCoord(previewCam, coords.x, coords.y, coords.z + 0.7)
+
+            Wait(0)
+        end
+    end)
+end
+
+local function spawnPreviewPed(model, previewCoords, outfitNum, tack)
+    if previewPed and DoesEntityExist(previewPed) then
+        DeleteEntity(previewPed)
+    end
+    previewPed = nil
+
+    if not (previewCoords and previewCoords.x and previewCoords.y and previewCoords.z) then
+        print('[rsg-stables] WARNING: spawnPreviewPed called with missing/malformed previewCoords — check stable.previewCoords in shared/config.lua')
+        lib.notify({ description = locale('preview_load_failed'), type = 'error' })
+        return nil
+    end
+
+    local hash = loadModel(model)
+    if not hash then
+        lib.notify({ description = locale('preview_load_failed'), type = 'error' })
+        return nil
+    end
+
+    local entity = CreatePed(hash, previewCoords.x, previewCoords.y, previewCoords.z, previewCoords.w, false, false, 0, 0)
+    SetModelAsNoLongerNeeded(hash)
+
+    if not DoesEntityExist(entity) then
+        lib.notify({ description = locale('preview_spawn_failed'), type = 'error' })
+        return nil
+    end
+
+    FreezeEntityPosition(entity, true)
+    SetEntityInvincible(entity, true)
+    SetEntityCollision(entity, false, false)
+    SetBlockingOfNonTemporaryEvents(entity, true)
+    SetPedCanBeTargetted(entity, false)
+    TaskStartScenarioInPlace(entity, 'WORLD_HORSE_IDLE_GRAZE', 0, true)
+
+    previewPed = entity
+    initAndApplyOutfit(entity, outfitNum or 0)
+    applyTackTable(entity, tack)
+
+    return entity
+end
+
+local function spawnPreviewHorse(model, previewCoords, outfitNum, tack)
+    despawnPreviewHorse()
+    local entity = spawnPreviewPed(model, previewCoords, outfitNum, tack)
+    if entity then
+        startPreviewCam(entity)
+    end
+end
+
+CreateThread(function()
+    while true do
+        Wait(1000)
+        if previewPed then
+            local ped = PlayerPedId()
+            if not DoesEntityExist(previewPed)
+                or #(GetEntityCoords(ped) - GetEntityCoords(previewPed)) > 10.0 then
+                despawnPreviewHorse()
+            end
+        end
+    end
+end)
+
+-- ===================== HORSE CARE / STORE (ox_target prompts on the active horse) =====================
+local lastFeedAt, lastBrushAt, lastWaterAt = 0, 0, 0
+local function bumpHorseNeed(key, amount, defaultValue)
+    if not activeHorse then return end
+    local current = activeHorse[key] or defaultValue or 100
+    activeHorse[key] = math.max(0, math.min(100, current + amount))
+end
+
+local function pushBondingToNative(horse)
+    if not (horse and DoesEntityExist(horse) and activeHorse) then return end
+    Citizen.InvokeNative(0x5DA12E025D47D4E5, horse, 7, math.floor(activeHorse.bonding or 0))
+end
+
+local function feedActiveHorse()
+    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
+    if IsEntityDead(activeHorse.entity) then
+        lib.notify({ description = locale('horse_is_dead'), type = 'error' })
+        return
+    end
+    local now = GetGameTimer()
+    if now - lastFeedAt < CARE_COOLDOWN then
+        lib.notify({ description = locale('not_hungry'), type = 'inform' })
+        return
+    end
+
+    local ok, result = lib.callback.await('rsg-stables:server:feedHorse', false)
+    if not ok then
+        lib.notify({ description = result or locale('no_feed'), type = 'error' })
+        return
+    end
+    lastFeedAt = now
+
+    local horse = activeHorse.entity
+    TaskAnimalInteraction(PlayerPedId(), horse, -224471938, 0, 0)
+
+    SetTimeout(2000, function()
+        if not DoesEntityExist(horse) then return end
+
+        -- health/stamina restored are percentage points (0-100 scale), added to current and
+        -- capped at 100 — not an instant full refill like the old flat behaviour.
+        local maxHp = GetEntityMaxHealth(horse)
+        local healthPct = (GetEntityHealth(horse) / math.max(1, maxHp)) * 100
+        local newHealthPct = math.min(100, healthPct + (result.health or 0))
+        SetEntityHealth(horse, math.max(1, math.floor((newHealthPct / 100) * maxHp)))
+
+        local staminaPct = tonumber(Citizen.InvokeNative(0x36731AC041289BB1, horse, 1)) or 0
+        local newStaminaPct = math.min(100, staminaPct + (result.stamina or 0))
+        Citizen.InvokeNative(0x675680D089BFA21F, horse, newStaminaPct) -- RESTORE_PED_STAMINA
+
+        if activeHorse then
+            if result.hunger then activeHorse.hunger = result.hunger end
+            if Config.HorseBonding.enabled and result.bonding then
+                activeHorse.bonding = result.bonding
+                pushBondingToNative(horse)
+            end
+        end
+
+        lib.notify({ description = locale('horse_enjoyed', result.label or locale('feed_generic')), type = 'success' })
+    end)
+end
+
+-- ===================== HORSE STIMULANT =====================
+local stimulant = { entity = nil, endsAt = 0 }
+
+local function applyStimulantFortify(horse, cfg)
+    Citizen.InvokeNative(0x675680D089BFA21F, horse, 100.0)                          -- RESTORE_PED_STAMINA (full refill)
+    Citizen.InvokeNative(0xC6258F41D86676E0, horse, 1, 100)                         -- _SET_ATTRIBUTE_CORE_VALUE (stamina core)
+    Citizen.InvokeNative(0x4AF5A4C7B9157D14, horse, 1, cfg.fortifyAmount, true)     -- _ENABLE_ATTRIBUTE_CORE_OVERPOWER (gold core)
+    Citizen.InvokeNative(0xF6A7C08DF2E28B28, horse, 1, cfg.fortifyAmount, true)     -- _ENABLE_ATTRIBUTE_OVERPOWER (gold bar)
+end
+
+local function stimulantActive()
+    return stimulant.entity ~= nil
+        and activeHorse ~= nil
+        and activeHorse.entity == stimulant.entity
+        and DoesEntityExist(stimulant.entity)
+        and not IsEntityDead(stimulant.entity)
+        and GetGameTimer() < stimulant.endsAt
+end
+
+local function startStimulantLoop(horse, durationSec)
+    local cfg = Config.HorseStimulant
+    local alreadyRunning = stimulant.entity ~= nil
+    stimulant.entity = horse
+    stimulant.endsAt = GetGameTimer() + durationSec * 1000
+    applyStimulantFortify(horse, cfg)
+    if alreadyRunning then return end
+
+    -- stamina top-up + fortify refresh (every 5s)
+    CreateThread(function()
+        local warned = false
+        while stimulantActive() do
+            local h = stimulant.entity
+            local stam = tonumber(Citizen.InvokeNative(0x36731AC041289BB1, h, 1)) or 0
+            if stam < cfg.staminaFloor then
+                Citizen.InvokeNative(0xC6258F41D86676E0, h, 1, cfg.staminaFloor) -- keep core topped up
+            end
+            Citizen.InvokeNative(0x675680D089BFA21F, h, 100.0)                  -- keep bar topped up
+            if not warned and stimulant.endsAt - GetGameTimer() <= 60000 then
+                warned = true
+                lib.notify({ description = locale('stimulant_wearing_off'), type = 'inform' })
+            end
+            Wait(5000)
+        end
+        local expiredNaturally = stimulant.entity and GetGameTimer() >= stimulant.endsAt
+        stimulant.entity, stimulant.endsAt = nil, 0
+        if expiredNaturally then
+            lib.notify({ description = locale('stimulant_worn_off'), type = 'inform' })
+        end
+    end)
+
+    -- speed boost while mounted (move-rate override is per-frame)
+    if (cfg.speedMultiplier or 1.0) > 1.0 then
+        CreateThread(function()
+            while stimulantActive() do
+                local h = stimulant.entity
+                if GetMount(cache.ped) == h then
+                    SetPedMoveRateOverride(h, cfg.speedMultiplier + 0.0)
+                    Wait(0)
+                else
+                    Wait(500)
+                end
+            end
+        end)
+    end
+end
+
+RegisterNetEvent('rsg-stables:client:useStimulant', function()
+    local cfg = Config.HorseStimulant
+    if not (cfg and cfg.enabled) then return end
+    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then
+        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        return
+    end
+    local horse = activeHorse.entity
+    if IsEntityDead(horse) then
+        lib.notify({ description = locale('horse_is_dead'), type = 'error' })
+        return
+    end
+    local mounted = GetMount(cache.ped) == horse
+    if not mounted and #(GetEntityCoords(cache.ped) - GetEntityCoords(horse)) > cfg.useDistance then
+        lib.notify({ description = locale('must_be_near_horse'), type = 'error' })
+        return
+    end
+
+    local ok, result = lib.callback.await('rsg-stables:server:useStimulant', false)
+    if not ok then
+        lib.notify({ description = result or locale('stimulant_failed'), type = 'error' })
+        return
+    end
+
+    TaskAnimalInteraction(cache.ped, horse, -1355254781, GetHashKey('p_cs_syringe01x'), 0)
+    Wait(3000)
+
+    if not DoesEntityExist(horse) then return end
+
+    startStimulantLoop(horse, result.duration)
+    lib.notify({ description = locale('stimulant_active', math.floor(result.duration / 60)), type = 'success' })
+end)
+
+local function waterActiveHorse()
+    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
+    if IsEntityDead(activeHorse.entity) then
+        lib.notify({ description = locale('horse_is_dead'), type = 'error' })
+        return
+    end
+    local now = GetGameTimer()
+    if now - lastWaterAt < CARE_COOLDOWN then
+        lib.notify({ description = locale('not_thirsty'), type = 'inform' })
+        return
+    end
+
+    local ok, result = lib.callback.await('rsg-stables:server:waterHorse', false)
+    if not ok then
+        lib.notify({ description = result or locale('no_water'), type = 'error' })
+        return
+    end
+    lastWaterAt = now
+
+    local horse = activeHorse.entity
+    TaskAnimalInteraction(PlayerPedId(), horse, -224471938, 0, 0)
+
+    SetTimeout(2000, function()
+        if not DoesEntityExist(horse) then return end
+
+        local staminaPct = tonumber(Citizen.InvokeNative(0x36731AC041289BB1, horse, 1)) or 0
+        local newStaminaPct = math.min(100, staminaPct + (result.stamina or 0))
+        Citizen.InvokeNative(0x675680D089BFA21F, horse, newStaminaPct) -- RESTORE_PED_STAMINA
+
+        -- Same as feedActiveHorse: thirst/bonding are the server's authoritative session values.
+        if activeHorse then
+            if result.thirst then activeHorse.thirst = result.thirst end
+            if Config.HorseBonding.enabled and result.bonding then
+                activeHorse.bonding = result.bonding
+                pushBondingToNative(horse)
+            end
+        end
+
+        lib.notify({ description = locale('horse_drank', result.label or locale('water_generic')), type = 'success' })
+    end)
+end
+
+local function brushActiveHorse()
+    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
+    if IsEntityDead(activeHorse.entity) then
+        lib.notify({ description = locale('horse_is_dead'), type = 'error' })
+        return
+    end
+    local now = GetGameTimer()
+    if now - lastBrushAt < CARE_COOLDOWN then
+        lib.notify({ description = locale('already_clean'), type = 'inform' })
+        return
+    end
+
+    local ok, result = lib.callback.await('rsg-stables:server:brushHorse', false)
+    if not ok then
+        lib.notify({ description = result or locale('already_clean'), type = 'inform' })
+        return
+    end
+    lastBrushAt = now
+
+    local horse = activeHorse.entity
+    TaskAnimalInteraction(PlayerPedId(), horse, 554992710, `P_BRUSHHORSE02X`, 0)
+
+    SetTimeout(4000, function()
+        if not DoesEntityExist(horse) then return end
+        ClearPedEnvDirt(horse)
+        ClearPedDamageDecalByZone(horse, 10, 'ALL')
+        ClearPedBloodDamage(horse)
+        Citizen.InvokeNative(0x5DA12E025D47D4E5, horse, 16, 0)
+
+        if activeHorse and Config.HorseBonding.enabled and result.bonding then
+            activeHorse.bonding = result.bonding
+            pushBondingToNative(horse)
+        end
+
+        lib.notify({ description = locale('brushed'), type = 'success' })
+    end)
+end
+
+local function showActiveHorseStats()
+    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then
+        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        return
+    end
+
+    local horse = activeHorse.entity
+    local healthPct = healthPctOf(horse)
+    local stamina = staminaPctOf(horse, 0)
+
+    local hunger = math.floor(activeHorse.hunger or 100)
+    local thirst = math.floor(activeHorse.thirst or 100)
+    local bonding = math.floor(activeHorse.bonding or 0)
+    local dirtiness = math.floor(math.max(0, math.min(100, tonumber(Citizen.InvokeNative(0xA4C8E23E29040DE0, horse, 16)) or 0)))
+    local cleanliness = 100 - dirtiness
+
+    NuiStatsDialog(locale('horse_stats'), {
+        { label = locale('stat_health'),      value = healthPct },
+        { label = locale('stat_stamina'),     value = stamina },
+        { label = locale('stat_hunger'),      value = hunger },
+        { label = locale('stat_thirst'),      value = thirst },
+        { label = locale('stat_bonding'),     value = bonding },
+        { label = locale('stat_cleanliness'), value = cleanliness },
+    })
+end
+
+local function findNearestStoreableStable(coords)
+    local nearestStable, nearestDist = nil, Config.StoreDistance
+    for _, stable in ipairs(Config.Stables) do
+        local distStore = #(coords - vector3(stable.storeCoords.x, stable.storeCoords.y, stable.storeCoords.z))
+        local distPed = #(coords - vector3(stable.pedCoords.x, stable.pedCoords.y, stable.pedCoords.z))
+        local dist = math.min(distStore, distPed)
+        if dist <= nearestDist then
+            nearestStable = stable
+            nearestDist = dist
+        end
+    end
+    return nearestStable
+end
+
+local function storeActiveHorse()
+    if not activeHorse then
+        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        return
+    end
+    if not DoesEntityExist(activeHorse.entity) then
+        despawnActiveHorseEntity()
+        return
+    end
+
+    local coords = GetEntityCoords(PlayerPedId())
+    local nearestStable = findNearestStoreableStable(coords)
+
+    if not nearestStable then
+        lib.notify({ description = locale('not_close_to_stable'), type = 'error' })
+        return
+    end
+
+    local ok, err = lib.callback.await('rsg-stables:server:storeHorse', false, activeHorse.dbId, healthPctOf(activeHorse.entity), staminaPctOf(activeHorse.entity, 100))
+    if ok then
+        lib.notify({ description = locale('store_success'), type = 'success' })
+        despawnActiveHorseEntity()
+    else
+        lib.notify({ description = err or locale('store_fail'), type = 'error' })
+    end
+end
+
+local isHorseFleeing = false
+
+local function fleeActiveHorse()
+    if not Config.HorseFlee.enabled then return end
+    if isHorseFleeing then return end
+    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
+    if IsEntityDead(activeHorse.entity) then
+        lib.notify({ description = locale('horse_is_dead'), type = 'error' })
+        return
+    end
+
+    isHorseFleeing = true
+
+    local horse = activeHorse
+    local horsePed = horse.entity
+    local snapshot = horse.snapshot
+
+    pcall(function()
+        exports.ox_target:removeLocalEntity(horsePed, HORSE_TARGETS)
+    end)
+    if activeHorse and activeHorse.entity == horsePed then
+        activeHorse = nil
+    end
+
+    if horseBlip and DoesBlipExist(horseBlip) then
+        RemoveBlip(horseBlip)
+    end
+    horseBlip = nil
+
+    lib.notify({ description = locale('horse_flees'), type = 'inform' })
+    TaskAnimalFlee(horsePed, cache.ped, -1)
+
+    CreateThread(function()
+        Wait(Config.HorseFlee.fleeDelay or 10000)
+
+        if DoesEntityExist(horsePed) then
+            local healthPct = healthPctOf(horsePed)
+
+            if Config.HorseFlee.storeOnFlee then
+                lib.callback.await('rsg-stables:server:fleeStoreHorse', false, horse.dbId, healthPct, staminaPctOf(horsePed, 100))
+                pendingHorse = nil
+            elseif snapshot then
+                local fc = GetEntityCoords(horsePed)
+                local fh = GetEntityHeading(horsePed)
+                TriggerServerEvent('rsg-stables:server:saveHorsePosition', horse.dbId, fc.x, fc.y, fc.z, fh, healthPct)
+                pendingHorse = snapshot
+                pendingHorse.pos_x, pendingHorse.pos_y, pendingHorse.pos_z, pendingHorse.pos_h = fc.x, fc.y, fc.z, fh
+                pendingHorse.health = healthPct
+                pendingHorse.hunger = horse.hunger or 100
+                pendingHorse.thirst = horse.thirst or 100
+                pendingHorse.bonding = horse.bonding or 0
+            end
+
+            SetEntityAsMissionEntity(horsePed, true, true)
+            DeleteEntity(horsePed)
+        end
+
+        isHorseFleeing = false
+    end)
+end
+
+CreateThread(function()
+    while true do
+        if (activeHorse and DoesEntityExist(activeHorse.entity)) or pendingHorse then
+            Wait(0)
+
+            pollWhistle()
+
+            if activeHorse and DoesEntityExist(activeHorse.entity) then
+                local numEvents = GetNumberOfEvents(0)
+                if numEvents > 0 then
+                    for i = 0, numEvents - 1 do
+                        if GetEventAtIndex(0, i) == `EVENT_PLAYER_PROMPT_TRIGGERED` then
+                            local eventData = DataView.ArrayBuffer(80)
+                            for a = 0, 9 do
+                                eventData:SetInt32(8 * a, 0)
+                            end
+                            local ok = Citizen.InvokeNative(0x57EC5FA4D4D6AFCA, 0, i, eventData:Buffer(), 10)
+                            if ok and eventData:GetInt32(0) == 33 and activeHorse and activeHorse.entity == eventData:GetInt32(16) then
+                                fleeActiveHorse()
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            Wait(400)
+        end
+    end
+end)
+
+local function spawnHorse(horse, coords)
+    local player = PlayerId()
+    local hash = loadModel(horse.model)
+    if not hash then
+        lib.notify({ description = locale('model_load_failed'), type = 'error' })
+        return
+    end
+
+    local horsePed = CreatePed(hash, coords.x, coords.y, coords.z, coords.w, true, false, 0, 0)
+    SetModelAsNoLongerNeeded(hash)
+    if not DoesEntityExist(horsePed) then
+        lib.notify({ description = locale('model_load_failed'), type = 'error' })
+        return
+    end
+    initAndApplyOutfit(horsePed, math.floor(tonumber(horse.outfit) or 0))
+    applyTackTable(horsePed, decodeTack(horse.tack))
+    SetEntityAsMissionEntity(horsePed, true, true)
+    SetBlockingOfNonTemporaryEvents(horsePed, true)
+    SetPedCanBeTargetted(horsePed, false)
+    Citizen.InvokeNative(0xD2CB0FB0FDCB473D, player, horsePed) -- SetPedAsSaddleHorseForPlayer
+    Citizen.InvokeNative(0x931B241409216C1F, player, horsePed, false) -- SetPedOwnsAnimal
+    Citizen.InvokeNative(0xB8B6430EAD2D2437, horsePed, `PLAYER_HORSE`) -- SetPedPersonality
+
+    local horseFlags = {
+        [6] = true,
+        [113] = false,
+        [136] = false,
+        [208] = true,
+        [209] = true,
+        [211] = true,
+        [277] = true,
+        [297] = true,
+        [300] = false,
+        [301] = false,
+        [312] = false,
+        [319] = true,
+        [400] = true,
+        [412] = false,
+        [419] = false,
+        [438] = false,
+        [439] = false,
+        [440] = false,
+        [561] = true
+    }
+    for flag, val in pairs(horseFlags) do
+        Citizen.InvokeNative(0x1913FE4CBF41C463, horsePed, flag, val); -- SetPedConfigFlag (kind of sets defaultbehavior)
+    end
+
+    local horseTunings = { 24, 25, 48 }
+    for _, flag in ipairs(horseTunings) do
+        Citizen.InvokeNative(0x1913FE4CBF41C463, horsePed, flag, false); -- SetHorseTuning
+    end
+
+    horseBlip = Citizen.InvokeNative(0x23F74C2FDA6E7C61, -1230993421, horsePed) -- BlipAddForEntity
+    Citizen.InvokeNative(0x9CB1A1623062F402, horseBlip, horse.name) -- SetBlipName
+    Citizen.InvokeNative(0xFE26E4609B1C3772, horsePed, "HorseCompanion", true) -- DecorSetBool
+    Citizen.InvokeNative(0xA691C10054275290, cache.ped, horsePed, 0) -- unknown
+    Citizen.InvokeNative(0x931B241409216C1F, cache.ped, horsePed, false) -- SetPedOwnsAnimal
+    Citizen.InvokeNative(0xED1C764997A86D5A, cache.ped, horsePed) -- unknown
+    Citizen.InvokeNative(0xDF93973251FB2CA5, player, true) -- SetPlayerMountStateActive
+    if not Config.AllowTwoPlayersRide then
+        Citizen.InvokeNative(0xe6d4e435b56d5bd0, player, horsePed) -- SetPlayerOwnsMount
+    end
+    Citizen.InvokeNative(0xAEB97D84CDF3C00B, horsePed, false) -- SetAnimalIsWild
+    Citizen.InvokeNative(0xA691C10054275290, horsePed, player, 431)
+    Citizen.InvokeNative(0x6734F0A6A52C371C, player, 431)
+    Citizen.InvokeNative(0x024EC9B649111915, horsePed, true)
+    Citizen.InvokeNative(0xEB8886E1065654CD, horsePed, 10, "ALL", 0)
+    SetEntityCanBeDamaged(horsePed, true)
+    SetPedNameDebug(horsePed, horse.name)
+    SetPedPromptName(horsePed, horse.name)
+    Citizen.InvokeNative(0xCC97B29285B1DC3B, horsePed, 1) -- SetAnimalMood
+
+    local retrieveHealthPct = math.max(0, math.min(100, tonumber(horse.health) or 100))
+    SetEntityHealth(horsePed, math.max(1, math.floor((retrieveHealthPct / 100) * GetEntityMaxHealth(horsePed))))
+    SetPedConfigFlag(horsePed, 5, true) -- disable frozen physics after cutscene guard
+
+    lastFeedAt, lastBrushAt, lastWaterAt = 0, 0, 0
+
+    local targetOk, targetErr = pcall(function()
+        exports.ox_target:addLocalEntity(horsePed, {
+            {
+                name = 'rsg_stables_feed',
+                icon = 'fas fa-wheat-awn',
+                label = locale('target_feed'),
+                distance = 2.5,
+                onSelect = feedActiveHorse,
+            },
+            {
+                name = 'rsg_stables_water',
+                icon = 'fas fa-glass-water',
+                label = locale('target_water'),
+                distance = 2.5,
+                canInteract = function() return Config.HorseNeeds.enabled end,
+                onSelect = waterActiveHorse,
+            },
+            {
+                name = 'rsg_stables_brush',
+                icon = 'fas fa-brush',
+                label = locale('target_brush'),
+                distance = 2.5,
+                onSelect = brushActiveHorse,
+            },
+            {
+                name = 'rsg_stables_stats',
+                icon = 'fas fa-chart-simple',
+                label = locale('horse_stats'),
+                distance = 2.5,
+                onSelect = showActiveHorseStats,
+            },
+            {
+                name = 'rsg_stables_store',
+                icon = 'fas fa-warehouse',
+                label = locale('target_store'),
+                distance = 2.5,
+                canInteract = function(entity)
+                    return findNearestStoreableStable(GetEntityCoords(entity)) ~= nil
+                end,
+                onSelect = storeActiveHorse,
+            },
+            {
+                name = 'rsg_stables_flee',
+                icon = 'fas fa-person-running',
+                label = locale('target_flee'),
+                distance = 2.5,
+                canInteract = function() return Config.HorseFlee.enabled end,
+                onSelect = fleeActiveHorse,
+            },
+        })
+    end)
+    if not targetOk then
+        print(('[rsg-stables] WARNING: failed to register ox_target options on the active horse: %s'):format(tostring(targetErr)))
+    end
+
+    activeHorse = {
+        entity = horsePed,
+        dbId = horse.id,
+        snapshot = horse,
+        hunger = math.max(0, math.min(100, tonumber(horse.hunger) or 100)),
+        thirst = math.max(0, math.min(100, tonumber(horse.thirst) or 100)),
+        bonding = math.max(0, math.min(100, tonumber(horse.bonding) or 0)),
+    }
+    pushBondingToNative(horsePed)
+    pendingHorse = nil
+end
+
+local isRecallingHorse = false
+
+local function groundZAt(x, y, zHint)
+    for _, probe in ipairs({ zHint + 5.0, zHint + 50.0, 1000.0 }) do
+        local found, gz = GetGroundZFor_3dCoord(x, y, probe, false)
+        if found and gz and gz ~= 0.0 then return gz end
+    end
+    return zHint
+end
+
+recallPendingHorse = function()
+    local snapshot = pendingHorse
+    if not snapshot or isRecallingHorse then return end
+    isRecallingHorse = true
+    pendingHorse = nil
+
+    local playerPed = cache.ped
+    local playerCoords = GetEntityCoords(playerPed)
+    local heading = GetEntityHeading(playerPed)
+    local cfg = Config.ActiveHorse or {}
+
+    local spawnCoords
+    local sx, sy, sz = tonumber(snapshot.pos_x), tonumber(snapshot.pos_y), tonumber(snapshot.pos_z)
+    local savedDist = (sx and sy and sz) and #(playerCoords - vector3(sx, sy, sz)) or nil
+    if savedDist and savedDist >= (cfg.minSpawnDistance or 25.0) and savedDist <= (cfg.recallMaxDistance or 150.0) then
+        -- Horse is still where it was left: spawn it there and let it travel to the player
+        spawnCoords = vector4(sx, sy, sz, tonumber(snapshot.pos_h) or 0.0)
+    else
+        -- Saved position is too close, too far or unknown: bring it in from behind the player
+        local dist = math.max(cfg.respawnDistance or 30.0, cfg.minSpawnDistance or 25.0)
+        local rad = math.rad(-heading)
+        local x = playerCoords.x - dist * math.sin(rad)
+        local y = playerCoords.y - dist * math.cos(rad)
+        spawnCoords = vector4(x, y, groundZAt(x, y, playerCoords.z), heading)
+    end
+
+    spawnHorse(snapshot, spawnCoords)
+
+    if activeHorse and DoesEntityExist(activeHorse.entity) then
+        local entity = activeHorse.entity
+        ClearPedTasks(entity)
+        TaskGoToEntity(entity, playerPed, -1, 2.5, 2.0, 0, 0)
+        SetPedKeepTask(entity, true)
+        lib.notify({ description = locale('horse_coming', snapshot.name or locale('your_horse')), type = 'success' })
+    else
+        pendingHorse = snapshot -- spawn failed, allow another whistle
+        lib.notify({ description = locale('horse_cannot_reach'), type = 'error' })
+    end
+
+    isRecallingHorse = false
+end
+
+-- ===================== ACTIVE HORSE POSITION SAVING =====================
+
+local lastSavedPos = nil
+
+local function saveActiveHorsePosition(force)
+    if not (activeHorse and activeHorse.entity and DoesEntityExist(activeHorse.entity)) then return end
+    if IsEntityDead(activeHorse.entity) then return end
+
+    local entity = activeHorse.entity
+    local coords = GetEntityCoords(entity)
+    local minMove = (Config.ActiveHorse and Config.ActiveHorse.minMoveToSave) or 2.0
+
+    if not force and lastSavedPos and lastSavedPos.id == activeHorse.dbId and #(coords - lastSavedPos.coords) < minMove then
+        return
+    end
+
+    local heading = GetEntityHeading(entity)
+    local healthPct = healthPctOf(entity)
+
+    TriggerServerEvent('rsg-stables:server:saveHorsePosition', activeHorse.dbId, coords.x, coords.y, coords.z, heading, healthPct)
+    lastSavedPos = { id = activeHorse.dbId, coords = coords }
+
+    if activeHorse.snapshot then
+        local snap = activeHorse.snapshot
+        snap.pos_x, snap.pos_y, snap.pos_z, snap.pos_h = coords.x, coords.y, coords.z, heading
+        snap.health = healthPct
+    end
+end
+
+CreateThread(function()
+    while true do
+        Wait((Config.ActiveHorse and Config.ActiveHorse.saveInterval) or 10000)
+        saveActiveHorsePosition(false)
+    end
+end)
+
+-- ===================== PED / BLIP SETUP =====================
+
+local function setupStables()
+    for _, stable in ipairs(Config.Stables) do
+        CreateThread(function()
+            local hash = loadModel(stable.pedModel)
+            if not hash then return end
+
+            local ped = CreatePed(hash, stable.pedCoords.x, stable.pedCoords.y, stable.pedCoords.z -1, stable.pedCoords.w, false, false, 0, 0)
+            if not DoesEntityExist(ped) then
+                print(('[rsg-stables] WARNING: CreatePed failed for stable "%s" (model %s)'):format(stable.name, tostring(stable.pedModel)))
+                return
+            end
+            SetModelAsNoLongerNeeded(hash)
+            Citizen.InvokeNative(0x283978A15512B2FE, ped, true) -- SET_RANDOM_OUTFIT_VARIATION (not exposed as a Lua global in RedM)
+            FreezeEntityPosition(ped, true)
+            SetEntityInvincible(ped, true)
+            SetBlockingOfNonTemporaryEvents(ped, true)
+            TaskStartScenarioInPlace(ped, 'WORLD_HUMAN_STAND_IMPATIENT', 0, true)
+
+            stablePeds[stable.name] = ped
+
+            exports.ox_target:addLocalEntity(ped, {
+                {
+                    name = 'rsg_stables_' .. stable.name,
+                    icon = 'fas fa-horse',
+                    label = locale('manage_stable', stable.label),
+                    onSelect = function()
+                        OpenStableMenu(stable)
+                    end,
+                },
+            })
+
+            AddLocationBlip(
+                stable.pedCoords.x, stable.pedCoords.y, stable.pedCoords.z,
+                stable.blip.sprite, stable.blip.color, stable.blip.scale, stable.label
+            )
+        end)
+    end
+end
+
+-- ===================== NUI UI CORE =====================
+local currentHandlers = {}
+local pendingInputSubmit, pendingInputCancel = nil, nil
+local pendingAlertClose = nil
+local currentTackHandlers = nil
+
+-- UI (NUI) strings are sent to the page from locales/*.json (ui_* keys)
+local nuiLocaleSent = false
+local UI_LOCALE_KEYS = { 'ui_stable', 'ui_back', 'ui_close', 'ui_prev_style', 'ui_next_style', 'ui_tack_hint', 'ui_rotate_zoom_hint', 'ui_total_spend', 'ui_insufficient_funds', 'ui_prev_category', 'ui_next_category', 'ui_review_apply', 'ui_input', 'ui_cancel', 'ui_confirm', 'ui_notice', 'ui_understood', 'ui_horse_stats' }
+
+local function SendNuiLocale()
+    if nuiLocaleSent then return end
+    local strings = {}
+    for _, key in ipairs(UI_LOCALE_KEYS) do strings[key] = locale(key) end
+    SendNUIMessage({ action = 'setLocale', strings = strings })
+    nuiLocaleSent = true
+end
+
+local function OpenNUI()
+    SendNuiLocale()
+    SetNuiFocus(true, true)
+end
+
+local function CloseNUI()
+    SetNuiFocus(false, false)
+    SendNUIMessage({ action = 'hide' })
+end
+
+local function NuiNotify(description, ntype)
+    lib.notify({ description = description, type = ntype or 'inform' })
+end
+
+local function NuiRender(screen)
+    currentHandlers = {}
+    currentTackHandlers = nil
+    local opts = {}
+    for i, o in ipairs(screen.options) do
+        local id = tostring(i)
+        currentHandlers[id] = o.onSelect
+        table.insert(opts, {
+            id = id,
+            title = o.title,
+            description = o.description,
+            icon = o.icon,
+            badge = o.badge,
+            disabled = o.disabled or false,
+            stats = o.stats,
+            variant = o.variant,
+        })
+    end
+
+    local backId = nil
+    if screen.back then
+        backId = '__back__'
+        currentHandlers[backId] = screen.back
+    end
+
+    OpenNUI()
+    SendNUIMessage({
+        action = 'render',
+        screen = {
+            title = screen.title,
+            subtitle = screen.subtitle,
+            hint = screen.hint,
+            backId = backId,
+            options = opts,
+        },
+    })
+end
+
+local function NuiInput(title, placeholder, onSubmit, onCancel)
+    OpenNUI()
+    pendingInputSubmit = onSubmit
+    pendingInputCancel = onCancel
+    SendNUIMessage({ action = 'inputDialog', title = title, placeholder = placeholder, maxLength = 40 })
+end
+
+local function NuiAlert(header, content, onClose)
+    OpenNUI()
+    pendingAlertClose = onClose
+    SendNUIMessage({ action = 'alertDialog', header = header, content = content })
+end
+
+NuiStatsDialog = function(header, stats, onClose)
+    OpenNUI()
+    pendingAlertClose = onClose
+    SendNUIMessage({ action = 'statsDialog', header = header, stats = stats })
+end
+
+local function NuiTackPicker(data)
+    currentHandlers = {}
+    OpenNUI()
+    SendNUIMessage({
+        action = 'tackPicker',
+        title = data.title,
+        subtitle = data.subtitle,
+        categoryIndex = data.categoryIndex,
+        categoryCount = data.categoryCount,
+        styleLabel = data.styleLabel,
+        styleMeta = data.styleMeta,
+        styleIndex = data.styleIndex,
+        styleCount = data.styleCount,
+        isLast = data.isLast,
+        costTotal = data.costTotal,
+        canAfford = data.canAfford,
+    })
+end
+
+RegisterNUICallback('select', function(data, cb)
+    local fn = currentHandlers[data.id]
+    if fn then fn() end
+    cb('ok')
+end)
+
+RegisterNUICallback('tackCycle', function(data, cb)
+    if currentTackHandlers and currentTackHandlers.cycle then
+        currentTackHandlers.cycle(data.dir)
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('tackCategoryNav', function(data, cb)
+    if currentTackHandlers then
+        if data.dir == 'next' and currentTackHandlers.nextCategory then
+            currentTackHandlers.nextCategory()
+        elseif data.dir == 'prev' and currentTackHandlers.prevCategory then
+            currentTackHandlers.prevCategory()
+        end
+    end
+    cb('ok')
+end)
+
+RegisterNUICallback('inputSubmit', function(data, cb)
+    local fn = pendingInputSubmit
+    pendingInputSubmit, pendingInputCancel = nil, nil
+    if fn then fn(data.value) end
+    cb('ok')
+end)
+
+RegisterNUICallback('inputCancel', function(data, cb)
+    local fn = pendingInputCancel
+    pendingInputSubmit, pendingInputCancel = nil, nil
+    if fn then fn() end
+    cb('ok')
+end)
+
+RegisterNUICallback('alertClose', function(data, cb)
+    local fn = pendingAlertClose
+    pendingAlertClose = nil
+    CloseNUI()
+    if fn then fn() end
+    cb('ok')
+end)
+
+RegisterNUICallback('statsClose', function(data, cb)
+    local fn = pendingAlertClose
+    pendingAlertClose = nil
+    CloseNUI()
+    if fn then fn() end
+    cb('ok')
+end)
+
+RegisterNUICallback('close', function(data, cb)
+    CloseNUI()
+    despawnPreviewHorse()
+    currentTackHandlers = nil
+    cb('ok')
+end)
+
+-- ===================== MENUS =====================
+
+function OpenStableMenu(stable)
+    despawnPreviewHorse()
+
+    if activeHorse then
+        NuiAlert(stable.label, locale('must_store_first'), CloseNUI)
+        return
+    end
+
+    if pendingHorse then
+        NuiAlert(stable.label, locale('horse_still_out_store', pendingHorse.name or locale('your_horse')), CloseNUI)
+        return
+    end
+
+    local horses = lib.callback.await('rsg-stables:server:getStableHorses', false, stable.name)
+    local breedingJobs = lib.callback.await('rsg-stables:server:getBreedingJobs', false, stable.name)
+
+    local options = {
+        {
+            title = locale('buy_horse'),
+            description = locale('buy_horse_desc'),
+            icon = 'dollar',
+            onSelect = function()
+                OpenBuyMenu(stable)
+            end,
+        },
+    }
+
+    local aliveCount = 0
+    for _, horse in ipairs(horses) do
+        if horse.alive then aliveCount = aliveCount + 1 end
+    end
+    if aliveCount >= 2 and Config.Breeding.enabled then
+        table.insert(options, {
+            title = locale('breed_horses'),
+            description = locale('breed_horses_desc'),
+            icon = 'heart',
+            onSelect = function()
+                OpenBreedingMenu(stable, horses)
+            end,
+        })
+    end
+
+    for _, job in ipairs(breedingJobs) do
+        local ready = (job.ready_at <= (os.time() * 1000))
+        table.insert(options, {
+            title = ready and locale('collect_foal') or locale('foal_growing', fmtTimeLeft(job.ready_at)),
+            description = ready and locale('foal_ready') or locale('foal_still_growing'),
+            icon = 'foal',
+            disabled = not ready,
+            onSelect = function()
+                local ok, err = lib.callback.await('rsg-stables:server:collectFoal', false, job.id)
+                if ok then
+                    NuiNotify(locale('foal_collected'), 'success')
+                else
+                    NuiNotify(err or locale('foal_collect_failed'), 'error')
+                end
+                OpenStableMenu(stable)
+            end,
+        })
+    end
+
+    for _, horse in ipairs(horses) do
+        local desc, badge
+        if horse.alive then
+            desc = locale('horse_health_stamina', horse.health, horse.stamina)
+            badge = nil
+        else
+            desc = locale('deceased')
+            badge = locale('deceased')
+        end
+        table.insert(options, {
+            title = horse.name,
+            description = desc,
+            icon = 'horse',
+            badge = badge,
+            onSelect = function()
+                OpenHorseMenu(stable, horse)
+            end,
+        })
+    end
+
+    NuiRender({
+        title = stable.label,
+        subtitle = locale('stable_ledger'),
+        options = options,
+    })
+end
+
+local function getBuyFunds()
+    local ok, playerData = pcall(function() return RSGCore.Functions.GetPlayerData() end)
+    if ok and playerData and playerData.money then
+        return playerData.money[Config.PaymentAccount] or 0
+    end
+    return 0
+end
+
+local function BreedStatBars(breed)
+    local max = Config.BreedStatMax or 5
+    return {
+        { label = locale('stat_health'), value = breed.health, max = max },
+        { label = locale('stat_stamina'), value = breed.stamina, max = max },
+        { label = locale('stat_speed'), value = breed.speed, max = max },
+        { label = locale('stat_accel'), value = breed.acceleration, max = max },
+    }
+end
+
+-- ============================================================
+-- Buy menu filters (class, breed, price, handling)
+-- ============================================================
+local BuyFilters = { class = nil, breed = nil, price = nil, handling = nil }
+
+local function breedGroupLabel(b)
+    -- "American Paint (Grey Overo)" -> "American Paint"
+    return (b.label:match('^(.-)%s*%(') or b.label)
+end
+
+local function filterValue(b, key)
+    if key == 'breed' then return breedGroupLabel(b) end
+    return b[key]
+end
+
+local function priceBandMatches(band, price)
+    if not band then return true end
+    return price >= (band.min or 0) and (not band.max or price <= band.max)
+end
+
+local function breedMatches(b, skipKey)
+    if skipKey ~= 'class' and BuyFilters.class and b.class ~= BuyFilters.class then return false end
+    if skipKey ~= 'breed' and BuyFilters.breed and breedGroupLabel(b) ~= BuyFilters.breed then return false end
+    if skipKey ~= 'handling' and BuyFilters.handling and b.handling ~= BuyFilters.handling then return false end
+    if skipKey ~= 'price' and not priceBandMatches(BuyFilters.price, b.price) then return false end
+    return true
+end
+
+local function activeFilterCount()
+    local n = 0
+    for _, v in pairs(BuyFilters) do if v then n = n + 1 end end
+    return n
+end
+
+local FILTER_LABELS = { class = locale('filter_class'), breed = locale('filter_breed'), price = locale('filter_price'), handling = locale('filter_handling') }
+
+local function filterDisplay(key)
+    local v = BuyFilters[key]
+    if not v then return locale('filter_any') end
+    if key == 'price' then return v.label end
+    return v
+end
+
+local function OpenFilterValueMenu(stable, key)
+    local options = {
+        {
+            title = locale('filter_any'),
+            description = locale('filter_clear_one'),
+            icon = 'xmark',
+            badge = BuyFilters[key] == nil and '✓' or nil,
+            onSelect = function()
+                BuyFilters[key] = nil
+                OpenBuyFilterMenu(stable)
+            end,
+        },
+    }
+
+    if key == 'price' then
+        for _, band in ipairs(Config.BuyPriceBands or {}) do
+            local count = 0
+            for _, b in ipairs(Config.Breeds) do
+                if breedMatches(b, 'price') and priceBandMatches(band, b.price) then count = count + 1 end
+            end
+            table.insert(options, {
+                title = band.label,
+                description = locale('horse_count', count),
+                icon = 'dollar',
+                badge = (BuyFilters.price and BuyFilters.price.label == band.label) and '✓' or nil,
+                disabled = count == 0,
+                onSelect = function()
+                    BuyFilters.price = band
+                    OpenBuyFilterMenu(stable)
+                end,
+            })
+        end
+    else
+        -- Collect distinct values, counting matches against the other active filters
+        local counts, order = {}, {}
+        for _, b in ipairs(Config.Breeds) do
+            local v = filterValue(b, key)
+            if v then
+                if not counts[v] then counts[v] = 0; table.insert(order, v) end
+                if breedMatches(b, key) then counts[v] = counts[v] + 1 end
+            end
+        end
+        table.sort(order)
+        for _, v in ipairs(order) do
+            table.insert(options, {
+                title = v,
+                description = locale('horse_count', counts[v]),
+                icon = 'horse',
+                badge = BuyFilters[key] == v and '✓' or nil,
+                disabled = counts[v] == 0,
+                onSelect = function()
+                    BuyFilters[key] = v
+                    OpenBuyFilterMenu(stable)
+                end,
+            })
+        end
+    end
+
+    NuiRender({
+        title = locale('filter_by', FILTER_LABELS[key]),
+        subtitle = stable.label,
+        back = function() OpenBuyFilterMenu(stable) end,
+        options = options,
+    })
+end
+
+function OpenBuyFilterMenu(stable)
+    local options = {}
+    for _, key in ipairs({ 'class', 'breed', 'price', 'handling' }) do
+        table.insert(options, {
+            title = FILTER_LABELS[key],
+            description = locale('filter_current', filterDisplay(key)),
+            icon = 'filter',
+            variant = BuyFilters[key] and 'filter-active' or 'filter',
+            onSelect = function() OpenFilterValueMenu(stable, key) end,
+        })
+    end
+    table.insert(options, {
+        title = locale('filter_clear_all'),
+        icon = 'xmark',
+        disabled = activeFilterCount() == 0,
+        onSelect = function()
+            BuyFilters = { class = nil, breed = nil, price = nil, handling = nil }
+            OpenBuyFilterMenu(stable)
+        end,
+    })
+
+    NuiRender({
+        title = locale('filter_horses'),
+        subtitle = stable.label,
+        back = function() OpenBuyMenu(stable) end,
+        options = options,
+    })
+end
+
+function OpenBuyMenu(stable)
+    despawnPreviewHorse()
+
+    local matches = {}
+    for _, breed in ipairs(Config.Breeds) do
+        if breedMatches(breed) then table.insert(matches, breed) end
+    end
+
+    local nFilters = activeFilterCount()
+    local options = {
+        {
+            title = nFilters > 0 and locale('filters_active', nFilters) or locale('filter_horses'),
+            description = nFilters > 0
+                and locale('filters_showing', #matches, #Config.Breeds)
+                or locale('filter_desc'),
+            icon = 'filter',
+            badge = nFilters > 0 and tostring(nFilters) or nil,
+            variant = nFilters > 0 and 'filter-active' or 'filter',
+            onSelect = function() OpenBuyFilterMenu(stable) end,
+        },
+    }
+
+    if #matches == 0 then
+        table.insert(options, {
+            title = locale('filter_no_match'),
+            description = locale('filter_no_match_desc'),
+            icon = 'xmark',
+            disabled = true,
+        })
+    end
+
+    local funds = getBuyFunds()
+    for _, breed in ipairs(matches) do
+        local affordable = funds >= breed.price
+        table.insert(options, {
+            title = breed.label,
+            description = affordable
+                and locale('breed_class_handling', breed.class or breed.breed, breed.handling)
+                or locale('breed_cant_afford_short', breed.class or breed.breed, breed.handling, breed.price - funds),
+            badge = ('$%.2f'):format(breed.price),
+            icon = 'horse',
+            variant = not affordable and 'unaffordable' or nil,
+            stats = BreedStatBars(breed),
+            onSelect = function()
+                OpenBreedPreviewMenu(stable, breed)
+            end,
+        })
+    end
+
+    NuiRender({
+        title = locale('buy_horse'),
+        subtitle = stable.label,
+        back = function() OpenStableMenu(stable) end,
+        options = options,
+    })
+end
+
+local function showBreedPreviewContext(stable, breed)
+    local options = {}
+
+    if breed.description then
+        table.insert(options, {
+            title = locale('about_breed'),
+            description = breed.description,
+            icon = 'horse',
+        })
+    end
+
+    local funds = getBuyFunds()
+    if funds < breed.price then
+        table.insert(options, {
+            title = locale('cant_afford_horse'),
+            description = locale('funds_short', funds, breed.price - funds),
+            badge = ('$%.2f'):format(breed.price),
+            icon = 'xmark',
+            variant = 'unaffordable',
+            disabled = true,
+            stats = BreedStatBars(breed),
+        })
+    else
+        table.insert(options, {
+            title = locale('purchase_horse'),
+            description = locale('breed_class_handling', breed.class or breed.breed, breed.handling),
+            badge = ('$%.2f'):format(breed.price),
+            icon = 'dollar',
+            stats = BreedStatBars(breed),
+            onSelect = function()
+                despawnPreviewHorse()
+    
+                NuiInput(locale('name_your_horse'), locale('horse_name'), function(value)
+                    if not value or value == '' then
+                        spawnPreviewHorse(breed.model, stable.previewCoords)
+                        showBreedPreviewContext(stable, breed)
+                        return
+                    end
+    
+                    local ok, result = lib.callback.await('rsg-stables:server:buyHorse', false, stable.name, breed.model, value, 0)
+                    if ok then
+                        NuiNotify(locale('purchase_success', value), 'success')
+                    else
+                        NuiNotify(result or locale('purchase_fail'), 'error')
+                    end
+                    OpenStableMenu(stable)
+                end, function()
+                    spawnPreviewHorse(breed.model, stable.previewCoords)
+                    showBreedPreviewContext(stable, breed)
+                end)
+            end,
+        })
+    end
+
+    NuiRender({
+        title = breed.label,
+        subtitle = locale('horse_preview'),
+        hint = locale('ui_rotate_zoom_hint'),
+        back = function()
+            despawnPreviewHorse()
+            OpenBuyMenu(stable)
+        end,
+        options = options,
+    })
+end
+
+function OpenBreedPreviewMenu(stable, breed)
+    spawnPreviewHorse(breed.model, stable.previewCoords)
+    showBreedPreviewContext(stable, breed)
+end
+
+function OpenBreedingMenu(stable, horses)
+    local alive = {}
+    for _, h in ipairs(horses) do
+        if h.alive then table.insert(alive, h) end
+    end
+
+    if #alive < 2 then
+        NuiNotify(locale('breed_need_two'), 'error')
+        return
+    end
+
+    local options = {}
+    for _, a in ipairs(alive) do
+        table.insert(options, {
+            title = a.name,
+            description = locale('select_first_parent'),
+            icon = 'horse',
+            onSelect = function()
+                local options2 = {}
+                for _, b in ipairs(alive) do
+                    if b.id ~= a.id then
+                        table.insert(options2, {
+                            title = b.name,
+                            description = locale('select_second_parent'),
+                            icon = 'horse',
+                            onSelect = function()
+                                local ok, err = lib.callback.await('rsg-stables:server:startBreeding', false, stable.name, a.id, b.id)
+                                if ok then
+                                    NuiNotify(locale('breeding_started'), 'success')
+                                else
+                                    NuiNotify(err or locale('breeding_failed'), 'error')
+                                end
+                                OpenStableMenu(stable)
+                            end,
+                        })
+                    end
+                end
+                NuiRender({
+                    title = locale('choose_second_parent'),
+                    subtitle = a.name,
+                    back = function() OpenBreedingMenu(stable, horses) end,
+                    options = options2,
+                })
+            end,
+        })
+    end
+
+    NuiRender({
+        title = locale('choose_first_parent'),
+        subtitle = locale('breed_horses'),
+        back = function() OpenStableMenu(stable) end,
+        options = options,
+    })
+end
+
+-- ===================== TACK MENU =====================
+local function buildPreviewTack(baseTack, selections)
+    local preview = {}
+    for k, v in pairs(baseTack) do preview[k] = v end
+    for k, v in pairs(selections) do
+        if v == 0 then
+            preview[k] = nil
+        else
+            preview[k] = v
+        end
+    end
+    return preview
+end
+
+local function refreshTackPreview(stable, horse, baseTack, selections)
+    if not (previewPed and DoesEntityExist(previewPed)) then return end
+    spawnPreviewPed(horse.model, stable.previewCoords, horse.outfit, buildPreviewTack(baseTack, selections))
+end
+
+local function currentPick(baseTack, selections, key)
+    local sel = selections[key]
+    if sel ~= nil then
+        if sel == 0 then return nil end
+        return sel
+    end
+    return baseTack[key]
+end
+
+local function calcTackTotal(baseTack, selections)
+    local total = 0
+    for _, category in ipairs(Config.TackCategories) do
+        local pick = currentPick(baseTack, selections, category.key)
+        local original = baseTack[category.key]
+        if pick and tostring(pick) ~= tostring(original) then
+            local item = getTackItem(category.key, pick)
+            if item then total = total + (item.price or 0) end
+        end
+    end
+    return total
+end
+
+local function showTackReview(stable, horse, baseTack, selections)
+    local options = {}
+    local total = calcTackTotal(baseTack, selections)
+
+    for catIndex, category in ipairs(Config.TackCategories) do
+        local pick = currentPick(baseTack, selections, category.key)
+        local original = baseTack[category.key]
+        local label = pick and tackItemLabel(category.key, pick) or locale('none')
+        local desc
+        if tostring(pick) == tostring(original) then
+            desc = locale('tack_no_change', label)
+        elseif not pick then
+            desc = locale('tack_removing')
+        else
+            local item = getTackItem(category.key, pick)
+            local price = item and item.price or 0
+            desc = locale('tack_item_price', label, price)
+        end
+        table.insert(options, {
+            title = category.label,
+            description = desc,
+            icon = 'horse',
+            onSelect = function()
+                showTackWizardStep(stable, horse, baseTack, selections, catIndex)
+            end,
+        })
+    end
+
+    table.insert(options, {
+        title = locale('tack_purchase_total', total),
+        description = locale('tack_confirm_desc'),
+        icon = 'dollar',
+        disabled = total == 0 and next(selections) == nil,
+        onSelect = function()
+            local ok, result = lib.callback.await('rsg-stables:server:applyHorseTack', false, horse.id, selections)
+            if ok then
+                NuiNotify(locale('tack_updated', result and result.charged or 0), 'success')
+                despawnPreviewHorse()
+                OpenStableMenu(stable)
+            else
+                NuiNotify(result or locale('tack_purchase_failed'), 'error')
+            end
+        end,
+    })
+
+    table.insert(options, {
+        title = locale('cancel'),
+        description = locale('tack_cancel_desc'),
+        icon = 'xmark',
+        onSelect = function()
+            despawnPreviewHorse()
+            OpenStableMenu(stable)
+        end,
+    })
+
+    NuiRender({
+        title = locale('review_tack'),
+        subtitle = horse.name,
+        back = function() showTackWizardStep(stable, horse, baseTack, selections, #Config.TackCategories) end,
+        options = options,
+    })
+end
+
+function showTackWizardStep(stable, horse, baseTack, selections, index)
+    local category = Config.TackCategories[index]
+    if not category then
+        showTackReview(stable, horse, baseTack, selections)
+        return
+    end
+
+    local items = Config.TackItems[category.key] or {}
+    local styleCount = #items + 1 -- +1 for "None" at position 1
+
+    local pick = currentPick(baseTack, selections, category.key)
+    local styleIndex = 1
+    for i, item in ipairs(items) do
+        if tostring(item.hash) == tostring(pick) then
+            styleIndex = i + 1
+            break
+        end
+    end
+
+    local function applyCurrentStyle()
+        if styleIndex == 1 then
+            selections[category.key] = pick and 0 or nil
+        else
+            selections[category.key] = items[styleIndex - 1].hash
+        end
+        refreshTackPreview(stable, horse, baseTack, selections)
+    end
+
+    local function sendStyleScreen()
+        local label, meta
+        if styleIndex == 1 then
+            label = locale('none')
+            meta = locale('tack_none_equipped', category.label:lower())
+        else
+            local item = items[styleIndex - 1]
+            label = item.label
+            meta = ('$%.2f'):format(item.price)
+        end
+        local total = calcTackTotal(baseTack, selections)
+        local funds = getBuyFunds()
+
+        NuiTackPicker({
+            title = category.label,
+            subtitle = horse.name,
+            categoryIndex = index,
+            categoryCount = #Config.TackCategories,
+            styleLabel = label,
+            styleMeta = meta,
+            styleIndex = styleIndex,
+            styleCount = styleCount,
+            isLast = index == #Config.TackCategories,
+            costTotal = total,
+            canAfford = funds >= total,
+        })
+    end
+
+    currentTackHandlers = {
+        cycle = function(dir)
+            if dir == 'left' then
+                styleIndex = styleIndex - 1
+                if styleIndex < 1 then styleIndex = styleCount end
+            else
+                styleIndex = styleIndex + 1
+                if styleIndex > styleCount then styleIndex = 1 end
+            end
+            applyCurrentStyle()
+            sendStyleScreen()
+        end,
+        nextCategory = function()
+            applyCurrentStyle()
+            showTackWizardStep(stable, horse, baseTack, selections, index + 1)
+        end,
+        prevCategory = function()
+            applyCurrentStyle()
+            if index > 1 then
+                showTackWizardStep(stable, horse, baseTack, selections, index - 1)
+            else
+                despawnPreviewHorse()
+                OpenStableMenu(stable)
+            end
+        end,
+    }
+
+    applyCurrentStyle()
+    sendStyleScreen()
+end
+
+function OpenTackMenu(stable, horse)
+    if not Config.Tack.enabled then
+        NuiNotify(locale('tack_disabled'), 'error')
+        return
+    end
+    local baseTack = decodeTack(horse.tack)
+    local selections = {}
+    spawnPreviewHorse(horse.model, stable.previewCoords, horse.outfit, baseTack)
+    showTackWizardStep(stable, horse, baseTack, selections, 1)
+end
+
+function OpenHorseMenu(stable, horse)
+    local options = {}
+
+    if horse.alive then
+        table.insert(options, {
+            title = locale('retrieve'),
+            description = locale('retrieve_desc'),
+            icon = 'retrieve',
+            onSelect = function()
+                local ok, result = lib.callback.await('rsg-stables:server:retrieveHorse', false, horse.id)
+                if not ok then
+                    NuiNotify(result or locale('retrieve_failed'), 'error')
+                    return
+                end
+                CloseNUI()
+                despawnPreviewHorse()
+                spawnHorse(result, stable.previewCoords)
+                if activeHorse then
+                    saveActiveHorsePosition(true)
+                    NuiNotify(locale('horse_retrieved', horse.name), 'success')
+                else
+                    pendingHorse = result -- spawn failed; horse is out in the DB, let a whistle retry
+                end
+            end,
+        })
+
+        if Config.Tack.enabled then
+            table.insert(options, {
+                title = locale('customize_tack'),
+                description = locale('customize_tack_desc'),
+                icon = 'shirt',
+                onSelect = function()
+                    OpenTackMenu(stable, horse)
+                end,
+            })
+        end
+
+        table.insert(options, {
+            title = locale('rename'),
+            description = locale('rename_desc', Config.RenameCost),
+            icon = 'pen',
+            onSelect = function()
+                NuiInput(locale('rename_horse'), locale('new_name'), function(value)
+                    if not value or value == '' then
+                        OpenHorseMenu(stable, horse)
+                        return
+                    end
+                    local ok, result = lib.callback.await('rsg-stables:server:renameHorse', false, horse.id, value)
+                    if ok then
+                        NuiNotify(locale('renamed_success', result), 'success')
+                    else
+                        NuiNotify(result or locale('rename_failed'), 'error')
+                    end
+                    OpenStableMenu(stable)
+                end, function() OpenHorseMenu(stable, horse) end)
+            end,
+        })
+
+        if not horse.insured then
+            table.insert(options, {
+                title = locale('insure'),
+                description = locale('insure_desc', Config.InsuranceCost),
+                icon = 'shield',
+                onSelect = function()
+                    local ok, err = lib.callback.await('rsg-stables:server:insureHorse', false, horse.id)
+                    if ok then
+                        NuiNotify(locale('insured_success'), 'success')
+                    else
+                        NuiNotify(err or locale('insure_failed'), 'error')
+                    end
+                    OpenStableMenu(stable)
+                end,
+            })
+        end
+
+        table.insert(options, {
+            title = locale('transfer'),
+            description = locale('transfer_desc'),
+            icon = 'route',
+            onSelect = function()
+                local transferOptions = {}
+                for _, s in ipairs(Config.Stables) do
+                    if s.name ~= stable.name then
+                        table.insert(transferOptions, {
+                            title = s.label,
+                            description = locale('transfer_here'),
+                            icon = 'route',
+                            onSelect = function()
+                                local ok, err = lib.callback.await('rsg-stables:server:transferHorse', false, horse.id, s.name)
+                                if ok then
+                                    NuiNotify(locale('transferred_success', horse.name, s.label), 'success')
+                                else
+                                    NuiNotify(err or locale('transfer_failed'), 'error')
+                                end
+                                OpenStableMenu(stable)
+                            end,
+                        })
+                    end
+                end
+                NuiRender({
+                    title = locale('transfer_to'),
+                    subtitle = horse.name,
+                    back = function() OpenHorseMenu(stable, horse) end,
+                    options = transferOptions,
+                })
+            end,
+        })
+    else
+        table.insert(options, {
+            title = locale('revive'),
+            description = locale('revive_desc', Config.ReviveCost),
+            icon = 'medkit',
+            onSelect = function()
+                local ok, err = lib.callback.await('rsg-stables:server:reviveHorse', false, horse.id)
+                if ok then
+                    NuiNotify(locale('revived_success'), 'success')
+                else
+                    NuiNotify(err or locale('revive_failed'), 'error')
+                end
+                OpenStableMenu(stable)
+            end,
+        })
+    end
+
+    NuiRender({
+        title = horse.name,
+        subtitle = stable.label,
+        back = function() OpenStableMenu(stable) end,
+        options = options,
+    })
+end
+
+-- ===================== STORE COMMAND =====================
+RegisterCommand('storehorse', storeActiveHorse, false)
+
+-- ===================== HORSE NEEDS (hunger / thirst) =====================
+CreateThread(function()
+    while true do
+        Wait(Config.HorseNeeds.decayInterval or 60000)
+
+        if Config.HorseNeeds.enabled and activeHorse and DoesEntityExist(activeHorse.entity) and not IsEntityDead(activeHorse.entity) then
+            bumpHorseNeed('hunger', -(Config.HorseNeeds.hungerDecayPerTick or 0))
+            bumpHorseNeed('thirst', -(Config.HorseNeeds.thirstDecayPerTick or 0))
+
+            local hunger = activeHorse.hunger or 100
+            local thirst = activeHorse.thirst or 100
+            local critical = Config.HorseNeeds.criticalThreshold or 15
+            local wellFed = Config.HorseNeeds.wellFedThreshold or 50
+
+            local horse = activeHorse.entity
+            local maxHp = GetEntityMaxHealth(horse)
+            local healthPct = (GetEntityHealth(horse) / math.max(1, maxHp)) * 100
+
+            if hunger < critical or thirst < critical then
+                local newHealthPct = math.max(0, healthPct - (Config.HorseNeeds.healthDrainPerTick or 0))
+                SetEntityHealth(horse, math.max(0, math.floor((newHealthPct / 100) * maxHp)))
+
+                if hunger < critical and thirst < critical then
+                    lib.notify({ description = locale('starving_dehydrated'), type = 'error' })
+                elseif hunger < critical then
+                    lib.notify({ description = locale('starving'), type = 'error' })
+                else
+                    lib.notify({ description = locale('dehydrated'), type = 'error' })
+                end
+            elseif hunger >= wellFed and thirst >= wellFed and healthPct < 100 then
+                local newHealthPct = math.min(100, healthPct + (Config.HorseNeeds.healthRegenPerTick or 0))
+                SetEntityHealth(horse, math.max(1, math.floor((newHealthPct / 100) * maxHp)))
+            end
+        end
+    end
+end)
+
+-- ===================== DEATH DETECTION =====================
+
+CreateThread(function()
+    while true do
+        Wait(1000)
+        if activeHorse and DoesEntityExist(activeHorse.entity) then
+            if IsEntityDead(activeHorse.entity) then
+                local dbId = activeHorse.dbId
+                despawnActiveHorseEntity()
+                lib.callback.await('rsg-stables:server:horseDied', false, dbId)
+            end
+        end
+    end
+end)
+
+-- ===================== INIT =====================
+
+CreateThread(function()
+    if not Config.Tack.enabled then return end
+    local unverified = 0
+    for _, items in pairs(Config.TackItems) do
+        for _, item in ipairs(items) do
+            if item.verified == false then unverified = unverified + 1 end
+        end
+    end
+    if unverified > 0 then
+        print(('[rsg-stables] WARNING: %d tack item(s) in shared/config.lua still use placeholder hashes and will not visually apply. Replace them with verified hashes before shipping tack customization to players.'):format(unverified))
+    end
+end)
+
+CreateThread(function()
+    setupStables()
+end)
+
+local hasReconciledHorses = false
+local function reconcileHorsesOnceLoaded()
+    if hasReconciledHorses then return end
+    hasReconciledHorses = true
+
+    local horse = lib.callback.await('rsg-stables:server:restoreActiveHorse', false)
+    if horse and not activeHorse then
+        pendingHorse = horse
+        if not Config.ActiveHorse or Config.ActiveHorse.notifyOnLogin ~= false then
+            lib.notify({ description = locale('horse_still_out_login', horse.name or locale('your_horse')), type = 'inform', duration = 7000 })
+        end
+    end
+end
+
+RegisterNetEvent('RSGCore:Client:OnPlayerLoaded', function()
+    reconcileHorsesOnceLoaded()
+end)
+
+-- Logging out (e.g. to character select): save where the horse is, remove it locally, keep it "out" in the DB
+RegisterNetEvent('RSGCore:Client:OnPlayerUnload', function()
+    saveActiveHorsePosition(true)
+    despawnActiveHorseEntity()
+    despawnPreviewHorse()
+    CloseNUI()
+    pendingHorse = nil
+    lastSavedPos = nil
+    stimulant.entity, stimulant.endsAt = nil, 0
+    hasReconciledHorses = false
+end)
+
+CreateThread(function()
+    local playerData = RSGCore.Functions.GetPlayerData()
+    local timeout = 0
+    while (not playerData or not playerData.citizenid) and timeout < 30000 do
+        Wait(500)
+        timeout = timeout + 500
+        playerData = RSGCore.Functions.GetPlayerData()
+    end
+    if playerData and playerData.citizenid then
+        reconcileHorsesOnceLoaded()
+    end
+end)
+
+AddEventHandler('onResourceStop', function(resource)
+    if GetCurrentResourceName() ~= resource then return end
+    for _, ped in pairs(stablePeds) do
+        if DoesEntityExist(ped) then DeleteEntity(ped) end
+    end
+    saveActiveHorsePosition(true)
+    despawnActiveHorseEntity()
+    despawnPreviewHorse()
+end)
