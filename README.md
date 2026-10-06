@@ -206,27 +206,3 @@ Target your horse to access:
 ## Security
 
 All money, item and horse-state changes happen on the server. Every callback re-checks ownership, sanitises IDs, and requires the player to actually be at the relevant stable (server-side distance check), so stable actions can't be triggered remotely by a modified client. Feed/water/brush have server-side cooldowns, and hunger/thirst/bonding are tracked by the server, not the client.
-
----
-
-## Changelog
-
-### 2.0.7
-- **Security:** `RSGCore:Server:OnPlayerUnload` was a network event – any client could end another player's horse session. Now server-only.
-- **Security:** server-side proximity checks for buy, retrieve, store, rename, insure, revive, transfer, tack, breeding and foal collection.
-- **Security:** `horseDied` only accepts the horse that is actually out (previously any owned horse could be marked dead or "insurance-healed").
-- **Security:** `fleeStoreHorse` only works when `Config.HorseFlee.storeOnFlee` is enabled; all horse/job IDs are validated as integers.
-- **Fix:** active horse is now networked, so other players can see it.
-- **Fix:** `Config.AllowTwoPlayersRide` had no effect (mount ownership was always set).
-- **Fix:** Flee Horse target option wasn't removed when the horse was stored/despawned.
-- **Fix:** a failed horse spawn after Retrieve no longer leaves the horse stuck "out" with no way to whistle it.
-- **Fix:** `Config.Breeding.sameStableOnly = false` is now respected.
-- **Fix:** duplicate purchase notification removed; feed/water/stimulant now show the inventory item box.
-- **Fix:** logging out now clears the preview horse, NUI and stimulant state.
-- **Cleanup:** merged duplicate store/flee-store server code, removed duplicate natives, a nonexistent `dirt` column read, a duplicate funds helper, unused locale keys and the unused NUI toast system; hard-coded preview hint moved to locales; removed NUI vignette.
-
----
-
-## Support
-
-Issues and suggestions: open an issue on the repository or contact RexShack.
