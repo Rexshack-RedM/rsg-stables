@@ -2,8 +2,6 @@
 
 Horse ownership and stables script for **RSG-Core** (RedM). Buy, stable, care for, customise and breed horses through a NUI stable menu, with persistent active horses that survive relogs and restarts.
 
-**Version:** 2.0.7 · **Author:** RexShack
-
 ---
 
 ## Features
