@@ -15,6 +15,8 @@
     "must_be_near_horse": "Musisz siedzieć na koniu lub stać obok niego",
     "stimulant_failed": "Nie udało się użyć stymulantu",
     "stimulant_active": "Twój koń jest pobudzony przez %d minut",
+    "horse_drank_river": "Your horse drank its fill from the water",
+    "horse_drank_trough": "Your horse drank its fill from the trough",
     "not_thirsty": "Twój koń nie jest jeszcze spragniony",
     "no_water": "Nie masz wody dla konia",
     "water_generic": "woda",

@@ -60,6 +60,24 @@ Config.HorseNeeds = {
     healthRegenPerTick = 1,     -- health % gained per decay tick while well fed/watered (capped at 100)
 }
 
+-- ===================== NATURAL DRINKING (rivers / lakes / troughs) =====================
+Config.HorseNaturalDrink = {
+    enabled         = true,
+    thirstThreshold = 40,    -- horse only drinks when thirst is at/below this
+    thirstRestore   = 100,   -- thirst is restored to this value (0-100)
+    checkInterval   = 2000,  -- ms between proximity checks
+    stillTime       = 3000,  -- ms the horse must stand still near water before it drinks
+    drinkDuration   = 8000,  -- ms the drinking animation plays
+    cooldown        = 120000,-- ms before the horse can drink naturally again
+    waterRadius     = 2.5,   -- how far in front of the horse to look for river/lake water
+    troughRadius    = 2.5,   -- how close the horse must be to a trough prop
+    allowMounted    = true,  -- drink while the player is still in the saddle
+    troughModels = {
+        'p_watertrough01x', 'p_watertrough02x', 'p_watertrough03x',
+        'p_watertroughsml01x', 'p_horsetrough01x',
+    },
+}
+
 -- ===================== BRUSHING =====================
 Config.HorseBrushItem = 'horse_brush' -- item required (not consumed) to Brush Horse
 

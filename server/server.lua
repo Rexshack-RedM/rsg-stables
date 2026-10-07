@@ -452,6 +452,26 @@ lib.callback.register('rsg-stables:server:waterHorse', function(source)
     return false, locale('need_water')
 end)
 
+-- Horse drank from a river/lake/trough on its own (no item needed)
+lib.callback.register('rsg-stables:server:naturalDrink', function(source)
+    local cfg = Config.HorseNaturalDrink
+    if not (cfg and cfg.enabled) then return false end
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player then return false end
+    local session = activeSessions[Player.PlayerData.citizenid]
+    if not session then return false end
+
+    local now = os.time() * 1000
+    if now - (session.lastNaturalDrinkAt or 0) < (cfg.cooldown or 120000) then return false end
+
+    applyDecay(session)
+    if session.thirst > (cfg.thirstThreshold or 40) then return false end
+
+    session.thirst = math.max(session.thirst, math.min(100, cfg.thirstRestore or 100))
+    session.lastNaturalDrinkAt = now
+    return true, { thirst = session.thirst }
+end)
+
 lib.callback.register('rsg-stables:server:brushHorse', function(source)
     local Player = RSGCore.Functions.GetPlayer(source)
     if not Player then return false, locale('player_not_found') end

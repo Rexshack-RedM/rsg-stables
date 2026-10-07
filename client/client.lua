@@ -2077,6 +2077,110 @@ CreateThread(function()
     end
 end)
 
+-- ===================== NATURAL DRINKING (rivers / lakes / troughs) =====================
+local naturalDrinking, lastNaturalDrinkAt = false, 0
+
+local function isHorseNearNaturalWater(horse, cfg)
+    local coords = GetEntityCoords(horse)
+    local fwd = GetEntityForwardVector(horse)
+    -- sample a few points around the horse's head for river/lake water
+    for _, dist in ipairs({ 0.0, 1.0, cfg.waterRadius or 2.5 }) do
+        local p = coords + fwd * dist
+        local zone = Citizen.InvokeNative(0x5BA7A68A346A5A91, p.x, p.y, p.z) -- GET_WATER_MAP_ZONE_AT_COORDS
+        if zone and zone ~= 0 and zone ~= false then
+            local ok, waterZ = GetWaterHeight(p.x, p.y, p.z + 2.0)
+            if ok and math.abs(waterZ - p.z) < 2.5 then return 'water' end
+        end
+    end
+    if IsEntityInWater(horse) then return 'water' end
+    for _, model in ipairs(cfg.troughModels or {}) do
+        local obj = GetClosestObjectOfType(coords.x, coords.y, coords.z, cfg.troughRadius or 2.5, joaat(model), false, false, false)
+        if obj and obj ~= 0 then return 'trough', obj end
+    end
+    return nil
+end
+
+local DRINK_ANIMS = {
+    water  = { enter = 'amb_creature_mammal@world_horse_drink_ground@stand_enter', base = 'amb_creature_mammal@world_horse_drink_ground@base', exit = 'amb_creature_mammal@world_horse_drink_ground@stand_exit' },
+    trough = { enter = 'amb_creature_mammal@prop_horse_drink_trough@stand_enter',  base = 'amb_creature_mammal@prop_horse_drink_trough@base',  exit = 'amb_creature_mammal@prop_horse_drink_trough@stand_exit' },
+}
+
+local function loadAnimDict(dict)
+    if HasAnimDictLoaded(dict) then return true end
+    RequestAnimDict(dict)
+    local timeout = GetGameTimer() + 3000
+    while not HasAnimDictLoaded(dict) and GetGameTimer() < timeout do Wait(10) end
+    return HasAnimDictLoaded(dict)
+end
+
+-- Plays enter -> looping drink -> exit directly on the horse (works mounted or not;
+-- ambient scenarios are ignored on a ridden/player-owned horse, which is why they didn't show)
+local function playHorseDrinkAnim(horse, kind, duration)
+    local set = DRINK_ANIMS[kind] or DRINK_ANIMS.water
+    if not (loadAnimDict(set.enter) and loadAnimDict(set.base) and loadAnimDict(set.exit)) then
+        Wait(duration); return
+    end
+    FreezeEntityPosition(horse, true)
+    TaskPlayAnim(horse, set.enter, 'enter', 2.0, -2.0, -1, 2, 0.0, false, false, false)
+    Wait(1500)
+    TaskPlayAnim(horse, set.base, 'base', 2.0, -2.0, -1, 1, 0.0, false, false, false)
+    Wait(duration)
+    if DoesEntityExist(horse) then
+        TaskPlayAnim(horse, set.exit, 'exit', 2.0, -2.0, -1, 2, 0.0, false, false, false)
+        Wait(1500)
+        StopAnimTask(horse, set.exit, 'exit', 1.0)
+        FreezeEntityPosition(horse, false)
+    end
+    RemoveAnimDict(set.enter); RemoveAnimDict(set.base); RemoveAnimDict(set.exit)
+end
+
+CreateThread(function()
+    local stillSince = nil
+    while true do
+        local cfg = Config.HorseNaturalDrink
+        Wait((cfg and cfg.checkInterval) or 2000)
+
+        if cfg and cfg.enabled and not naturalDrinking and activeHorse and DoesEntityExist(activeHorse.entity)
+            and not IsEntityDead(activeHorse.entity)
+            and (activeHorse.thirst or 100) <= (cfg.thirstThreshold or 40)
+            and GetGameTimer() - lastNaturalDrinkAt >= (cfg.cooldown or 120000) then
+
+            local horse = activeHorse.entity
+            local mounted = IsPedOnMount(cache.ped) and GetMount(cache.ped) == horse
+            local canDrink = (cfg.allowMounted or not mounted) and GetEntitySpeed(horse) < 0.3
+            local source, trough = nil, nil
+            if canDrink then source, trough = isHorseNearNaturalWater(horse, cfg) end
+
+            if source then
+                stillSince = stillSince or GetGameTimer()
+                if GetGameTimer() - stillSince >= (cfg.stillTime or 3000) then
+                    stillSince = nil
+                    naturalDrinking = true
+                    lastNaturalDrinkAt = GetGameTimer()
+
+                    local ok, result = lib.callback.await('rsg-stables:server:naturalDrink', false)
+                    if ok and DoesEntityExist(horse) then
+                        if trough and DoesEntityExist(trough) then
+                            TaskTurnPedToFaceEntity(horse, trough, 1500)
+                            Wait(1500)
+                        end
+                        playHorseDrinkAnim(horse, source, cfg.drinkDuration or 8000)
+                        if activeHorse and activeHorse.entity == horse and result and result.thirst then
+                            activeHorse.thirst = result.thirst
+                        end
+                        lib.notify({ description = locale(source == 'trough' and 'horse_drank_trough' or 'horse_drank_river'), type = 'success' })
+                    end
+                    naturalDrinking = false
+                end
+            else
+                stillSince = nil
+            end
+        else
+            stillSince = nil
+        end
+    end
+end)
+
 -- ===================== DEATH DETECTION =====================
 
 CreateThread(function()

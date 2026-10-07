@@ -15,6 +15,8 @@
     "must_be_near_horse": "Πρέπει να είσαι πάνω ή δίπλα στο άλογό σου",
     "stimulant_failed": "Αδυναμία χρήσης διεγερτικού",
     "stimulant_active": "Το άλογό σου είναι διεγερμένο για %d λεπτά",
+    "horse_drank_river": "Your horse drank its fill from the water",
+    "horse_drank_trough": "Your horse drank its fill from the trough",
     "not_thirsty": "Το άλογό σου δεν διψάει ακόμα",
     "no_water": "Δεν έχεις νερό για το άλογό σου",
     "water_generic": "νερό",
