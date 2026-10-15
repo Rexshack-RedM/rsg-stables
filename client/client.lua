@@ -2,13 +2,14 @@ local RSGCore = exports['rsg-core']:GetCoreObject()
 lib.locale()
 
 local stablePeds = {}
+local stableBlips = {}
 local activeHorse = nil -- { entity = int, dbId = int, maxhealth = int, snapshot = table, hunger = num, thirst = num }
 local horseBlip = nil
 local pendingHorse = nil -- horse that is 'out' in the DB but has no entity (fled, or restored after relog); whistle recalls it
 local recallPendingHorse
 local NuiStatsDialog
 local CARE_COOLDOWN = 60000 -- ms; mirrors server.lua's CARE_COOLDOWN (client-side cooldown is UX only, server enforces the real limit)
-local HORSE_TARGETS = { 'rsg_stables_feed', 'rsg_stables_water', 'rsg_stables_brush', 'rsg_stables_stats', 'rsg_stables_store', 'rsg_stables_flee' }
+local HORSE_TARGETS = { 'rsg_stables_feed', 'rsg_stables_water', 'rsg_stables_brush', 'rsg_stables_stats', 'rsg_stables_store', 'rsg_stables_flee', 'rsg_stables_inventory' }
 
 local function healthPctOf(entity)
     return math.floor((GetEntityHealth(entity) / math.max(1, GetEntityMaxHealth(entity))) * 100)
@@ -119,6 +120,54 @@ local function despawnActiveHorseEntity()
     activeHorse = nil
 end
 
+local whistleToken = 0
+local HORSE_NOSE_OFFSET = 1.3 -- approx distance from a horse's centre to its nose
+
+-- Walk/run the horse to a spot in front of the player, stop there and face the player
+local function sendHorseToPlayer(entity, playerPed)
+    whistleToken = whistleToken + 1
+    local token = whistleToken
+    local stopDist = (Config.WhistleStopDistance or 1.0) + HORSE_NOSE_OFFSET
+
+    local function targetPoint()
+        local pc = GetEntityCoords(playerPed)
+        local fwd = GetEntityForwardVector(playerPed)
+        return vector3(pc.x + fwd.x * stopDist, pc.y + fwd.y * stopDist, pc.z)
+    end
+
+    CreateThread(function()
+        local target = targetPoint()
+        ClearPedTasks(entity)
+        TaskGoToCoordAnyMeans(entity, target.x, target.y, target.z, 2.5, 0, false, 786603, 0xbf800000)
+
+        local walking = false
+        local deadline = GetGameTimer() + 60000
+        while token == whistleToken and DoesEntityExist(entity) and not IsEntityDead(entity) and GetGameTimer() < deadline do
+            Wait(100)
+            if GetMount(playerPed) == entity then return end
+
+            local horsePos = GetEntityCoords(entity)
+            local dist = #(horsePos.xy - target.xy)
+
+            -- re-target if the player moved, and drop to a walk for the final approach
+            local newTarget = targetPoint()
+            local moved = #(newTarget.xy - target.xy) > 1.0
+            local wantWalk = dist < 6.0
+            if moved or (wantWalk and not walking) then
+                target = newTarget
+                walking = wantWalk
+                TaskGoToCoordAnyMeans(entity, target.x, target.y, target.z, walking and 1.0 or 2.5, 0, false, 786603, 0xbf800000)
+            end
+
+            if dist <= 0.6 then
+                ClearPedTasks(entity)
+                TaskTurnPedToFaceEntity(entity, playerPed, 1500)
+                return
+            end
+        end
+    end)
+end
+
 local function whistleActiveHorse()
     if not (activeHorse and activeHorse.entity and DoesEntityExist(activeHorse.entity)) then return end
     if IsEntityDead(activeHorse.entity) then return end
@@ -126,7 +175,7 @@ local function whistleActiveHorse()
     local entity = activeHorse.entity
     local playerPed = PlayerPedId()
 
-    if IsPedOnSpecificMount and IsPedOnSpecificMount(playerPed, entity) then return end
+    if GetMount(playerPed) == entity then return end
 
     local playerCoords = GetEntityCoords(playerPed)
     local horseCoords = GetEntityCoords(entity)
@@ -139,22 +188,39 @@ local function whistleActiveHorse()
         local y = playerCoords.y + 5.0 * math.cos(rad)
         SetEntityCoords(entity, x, y, playerCoords.z, false, false, false, true)
         SetEntityHeading(entity, heading + 180.0)
+        sendHorseToPlayer(entity, playerPed)
     else
-        ClearPedTasks(entity)
-        TaskGoToEntity(entity, playerPed, -1, 2.5, 1.5, 0, 0)
-        SetPedKeepTask(entity, true)
+        sendHorseToPlayer(entity, playerPed)
     end
 end
 
+local function whistlePressed()
+    return IsControlJustPressed(0, `INPUT_WHISTLE`) or IsDisabledControlJustPressed(0, `INPUT_WHISTLE`)
+end
+
 local function pollWhistle()
+    if not whistlePressed() then return end
+    if IsPedDeadOrDying(cache.ped, true) then return end
+
+    -- activeHorse is set but the game removed the entity (culled, cleaned up, etc.):
+    -- fall back to a recall so the whistle still brings the horse back
+    if activeHorse and not (activeHorse.entity and DoesEntityExist(activeHorse.entity)) then
+        local snapshot = activeHorse.snapshot
+        if snapshot then
+            snapshot.hunger = activeHorse.hunger or snapshot.hunger
+            snapshot.thirst = activeHorse.thirst or snapshot.thirst
+            snapshot.bonding = activeHorse.bonding or snapshot.bonding
+        end
+        if horseBlip and DoesBlipExist(horseBlip) then RemoveBlip(horseBlip) end
+        horseBlip = nil
+        activeHorse = nil
+        if snapshot then pendingHorse = snapshot end
+    end
+
     if activeHorse then
-        if IsControlJustPressed(0, `INPUT_WHISTLE`) then
-            whistleActiveHorse()
-        end
-    elseif pendingHorse then
-        if IsControlJustPressed(0, `INPUT_WHISTLE`) and recallPendingHorse and not IsPedDeadOrDying(cache.ped, true) then
-            recallPendingHorse()
-        end
+        whistleActiveHorse()
+    elseif pendingHorse and recallPendingHorse then
+        recallPendingHorse()
     end
 end
 
@@ -335,7 +401,7 @@ local function pushBondingToNative(horse)
     Citizen.InvokeNative(0x5DA12E025D47D4E5, horse, 7, math.floor(activeHorse.bonding or 0))
 end
 
-local function feedActiveHorse()
+local function feedActiveHorse(preferredItem)
     if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
     if IsEntityDead(activeHorse.entity) then
         lib.notify({ description = locale('horse_is_dead'), type = 'error' })
@@ -347,7 +413,7 @@ local function feedActiveHorse()
         return
     end
 
-    local ok, result = lib.callback.await('rsg-stables:server:feedHorse', false)
+    local ok, result = lib.callback.await('rsg-stables:server:feedHorse', false, preferredItem)
     if not ok then
         lib.notify({ description = result or locale('no_feed'), type = 'error' })
         return
@@ -355,7 +421,10 @@ local function feedActiveHorse()
     lastFeedAt = now
 
     local horse = activeHorse.entity
-    TaskAnimalInteraction(PlayerPedId(), horse, -224471938, 0, 0)
+    local ped = PlayerPedId()
+    TaskTurnPedToFaceEntity(ped, horse, 800)
+    Wait(800)
+    TaskAnimalInteraction(ped, horse, -224471938, 0, 0) -- hand-feed animation
 
     SetTimeout(2000, function()
         if not DoesEntityExist(horse) then return end
@@ -562,6 +631,33 @@ local function brushActiveHorse()
     end)
 end
 
+-- Inventory-use checks shared by the feed items and the brush: horse out, dismounted, close by
+local function canCareFromInventory(dismountKey, tooFarKey)
+    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then
+        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        return false
+    end
+    if GetMount(cache.ped) == activeHorse.entity then
+        lib.notify({ description = locale(dismountKey), type = 'error' })
+        return false
+    end
+    if #(GetEntityCoords(cache.ped) - GetEntityCoords(activeHorse.entity)) > (Config.HorseBrushDistance or 3.0) then
+        lib.notify({ description = locale(tooFarKey), type = 'error' })
+        return false
+    end
+    return true
+end
+
+-- Using a feed item (horse_apple, horse_carrot, ...) from the inventory
+RegisterNetEvent('rsg-stables:client:useFeed', function(item)
+    if canCareFromInventory('feed_dismount', 'feed_too_far') then feedActiveHorse(item) end
+end)
+
+-- Using the horse_brush item from the inventory
+RegisterNetEvent('rsg-stables:client:useBrush', function()
+    if canCareFromInventory('brush_dismount', 'brush_too_far') then brushActiveHorse() end
+end)
+
 local function showActiveHorseStats()
     if not (activeHorse and DoesEntityExist(activeHorse.entity)) then
         lib.notify({ description = locale('no_active_horse'), type = 'error' })
@@ -692,10 +788,16 @@ end
 
 CreateThread(function()
     while true do
-        if (activeHorse and DoesEntityExist(activeHorse.entity)) or pendingHorse then
+        if activeHorse or pendingHorse then
             Wait(0)
 
             pollWhistle()
+
+            -- hide the native horse Brush / Feed prompts (use the ox_target options instead)
+            if Config.HideNativeBrushFeed and activeHorse then
+                DisableControlAction(0, `INPUT_INTERACT_HORSE_BRUSH`, true)
+                DisableControlAction(0, `INPUT_INTERACT_HORSE_FEED`, true)
+            end
 
             if activeHorse and DoesEntityExist(activeHorse.entity) then
                 local numEvents = GetNumberOfEvents(0)
@@ -721,6 +823,7 @@ CreateThread(function()
 end)
 
 local function spawnHorse(horse, coords)
+    despawnActiveHorseEntity() -- never leave a previous horse entity orphaned
     local player = PlayerId()
     local hash = loadModel(horse.model)
     if not hash then
@@ -741,7 +844,6 @@ local function spawnHorse(horse, coords)
     SetBlockingOfNonTemporaryEvents(horsePed, true)
     SetPedCanBeTargetted(horsePed, false)
     Citizen.InvokeNative(0xD2CB0FB0FDCB473D, player, horsePed) -- SetPedAsSaddleHorseForPlayer
-    Citizen.InvokeNative(0x931B241409216C1F, player, horsePed, false) -- SetPedOwnsAnimal
     Citizen.InvokeNative(0xB8B6430EAD2D2437, horsePed, `PLAYER_HORSE`) -- SetPedPersonality
 
     local horseFlags = {
@@ -807,7 +909,7 @@ local function spawnHorse(horse, coords)
                 icon = 'fas fa-wheat-awn',
                 label = locale('target_feed'),
                 distance = 2.5,
-                onSelect = feedActiveHorse,
+                onSelect = function() feedActiveHorse() end,
             },
             {
                 name = 'rsg_stables_water',
@@ -848,6 +950,17 @@ local function spawnHorse(horse, coords)
                 distance = 2.5,
                 canInteract = function() return Config.HorseFlee.enabled end,
                 onSelect = fleeActiveHorse,
+            },
+            {
+                name = 'rsg_stables_inventory',
+                icon = 'fas fa-box-open',
+                label = locale('target_inventory'),
+                distance = Config.HorseInventory.distance or 2.5,
+                canInteract = function() return Config.HorseInventory.enabled end,
+                onSelect = function()
+                    if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
+                    TriggerServerEvent('rsg-stables:server:openHorseInventory', activeHorse.dbId, NetworkGetNetworkIdFromEntity(activeHorse.entity))
+                end,
             },
         })
     end)
@@ -907,9 +1020,7 @@ recallPendingHorse = function()
 
     if activeHorse and DoesEntityExist(activeHorse.entity) then
         local entity = activeHorse.entity
-        ClearPedTasks(entity)
-        TaskGoToEntity(entity, playerPed, -1, 2.5, 2.0, 0, 0)
-        SetPedKeepTask(entity, true)
+        sendHorseToPlayer(entity, playerPed)
         lib.notify({ description = locale('horse_coming', snapshot.name or locale('your_horse')), type = 'success' })
     else
         pendingHorse = snapshot -- spawn failed, allow another whistle
@@ -988,7 +1099,7 @@ local function setupStables()
                 },
             })
 
-            AddLocationBlip(
+            stableBlips[#stableBlips + 1] = AddLocationBlip(
                 stable.pedCoords.x, stable.pedCoords.y, stable.pedCoords.z,
                 stable.blip.sprite, stable.blip.color, stable.blip.scale, stable.label
             )
@@ -2263,6 +2374,10 @@ AddEventHandler('onResourceStop', function(resource)
     for _, ped in pairs(stablePeds) do
         if DoesEntityExist(ped) then DeleteEntity(ped) end
     end
+    for _, blip in ipairs(stableBlips) do
+        if DoesBlipExist(blip) then RemoveBlip(blip) end
+    end
+    CloseNUI()
     saveActiveHorsePosition(true)
     despawnActiveHorseEntity()
     despawnPreviewHorse()

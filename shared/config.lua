@@ -4,12 +4,13 @@ Config.Locale = 'en'
 
 -- ===================== GENERAL =====================
 Config.MaxOwnedHorses      = 8      -- max horses a single player can own across all stables
-Config.MaxHorsesPerStable  = 20     -- max horses stored at a single stable location
+Config.MaxHorsesPerStable  = 20     -- max horses a single player can keep at one stable location
 Config.RenameCost          = 15     -- $ cost to rename an owned horse
 Config.InsuranceCost       = 25     -- $ cost to insure a horse
 Config.ReviveCost          = 40     -- $ cost to revive/replace a dead insured horse
 Config.StoreDistance       = 8.0    -- max distance player's mount can be from stable to store it
 Config.PaymentAccount      = 'cash' -- 'cash' or 'bank'
+Config.WhistleStopDistance = 1.0 -- whistled horse stops this many meters in front of the player (measured to the horse's nose)
 Config.WhistleTeleportDistance = 60.0 -- if the active horse is farther than this when whistled, it's moved near the player instead of walking/running over
 Config.AllowTwoPlayersRide = false
 
@@ -30,6 +31,7 @@ Config.ActiveHorse = {
 -- ===================== FEEDING / NEEDS =====================
 Config.HorseFeedItems = {
     { item = 'horse_apple',  label = 'Horse Apple',  health = 10, stamina = 10, hunger = 15 },
+    { item = 'horse_carrot', label = 'Horse Carrot', health = 10, stamina = 10, hunger = 15 },
 }
 
 Config.HorseDrinkItems = {
@@ -79,7 +81,8 @@ Config.HorseNaturalDrink = {
 }
 
 -- ===================== BRUSHING =====================
-Config.HorseBrushItem = 'horse_brush' -- item required (not consumed) to Brush Horse
+Config.HorseBrushItem = 'horse_brush' -- item required (not consumed) to Brush Horse; using it from the inventory brushes your horse
+Config.HorseBrushDistance = 3.0 -- how close you must be to your horse to use the brush or a feed item from the inventory
 
 -- ===================== BONDING =====================
 Config.HorseBonding = {
@@ -87,6 +90,16 @@ Config.HorseBonding = {
     feedGain  = 1, -- bonding gained per successful Feed Horse
     waterGain = 1, -- bonding gained per successful Water Horse
     brushGain = 2, -- bonding gained per successful Brush Horse (grooming bonds the most)
+}
+
+Config.HideNativeBrushFeed = true -- hide the game's own Brush / Feed horse prompts (ox_target options are used instead)
+
+-- ===================== HORSE INVENTORY =====================
+Config.HorseInventory = {
+    enabled   = true,     -- adds an "Open Saddlebags" target prompt to the player's active horse (rsg-inventory stash)
+    maxweight = 40000,    -- stash max weight (grams)
+    slots     = 20,       -- stash slots
+    distance  = 2.5,      -- ox_target interaction distance
 }
 
 -- ===================== FLEE =====================

@@ -338,9 +338,29 @@ lib.callback.register('rsg-stables:server:restoreActiveHorse', function(source)
             return nil
         end
 
-        startSession(citizenid, row.id, row.hunger, row.thirst, row.bonding)
+        -- keep an existing session for this horse: re-calling this callback must not reset
+        -- the feed/water/brush cooldowns or roll hunger/thirst back to stale DB values
+        local session = activeSessions[citizenid]
+        if session and session.horseId == row.id then
+            applyDecay(session)
+            row.hunger, row.thirst, row.bonding = session.hunger, session.thirst, session.bonding
+        else
+            startSession(citizenid, row.id, row.hunger, row.thirst, row.bonding)
+        end
         return row
     end)
+end)
+
+-- ===================== HORSE FEED ITEMS =====================
+for _, feedItem in ipairs(Config.HorseFeedItems) do
+    RSGCore.Functions.CreateUseableItem(feedItem.item, function(source)
+        TriggerClientEvent('rsg-stables:client:useFeed', source, feedItem.item)
+    end)
+end
+
+-- ===================== HORSE BRUSH ITEM =====================
+RSGCore.Functions.CreateUseableItem(Config.HorseBrushItem or 'horse_brush', function(source)
+    TriggerClientEvent('rsg-stables:client:useBrush', source)
 end)
 
 -- ===================== HORSE STIMULANT =====================
@@ -377,7 +397,7 @@ lib.callback.register('rsg-stables:server:useStimulant', function(source)
     return true, { duration = cfg.duration }
 end)
 
-lib.callback.register('rsg-stables:server:feedHorse', function(source)
+lib.callback.register('rsg-stables:server:feedHorse', function(source, preferredItem)
     local Player = RSGCore.Functions.GetPlayer(source)
     if not Player then return false, locale('player_not_found') end
 
@@ -389,7 +409,13 @@ lib.callback.register('rsg-stables:server:feedHorse', function(source)
         return false, locale('not_hungry')
     end
 
+    -- item used from the inventory is tried first, then any other feed item the player carries
+    local feedList = {}
     for _, feedItem in ipairs(Config.HorseFeedItems) do
+        if feedItem.item == preferredItem then table.insert(feedList, 1, feedItem) else feedList[#feedList + 1] = feedItem end
+    end
+
+    for _, feedItem in ipairs(feedList) do
         local owned = Player.Functions.GetItemByName(feedItem.item)
         if owned and (owned.amount or 0) > 0 then
             local removed = Player.Functions.RemoveItem(feedItem.item, 1, nil, 'rsg-stables-feed')
@@ -518,7 +544,7 @@ lib.callback.register('rsg-stables:server:buyHorse', function(source, stableName
         end
 
         return withLock('stable:' .. stableName, function()
-            local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE stable = ?', { stableName })
+            local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE citizenid = ? AND stable = ?', { Player.PlayerData.citizenid, stableName })
             if atStable and atStable >= Config.MaxHorsesPerStable then
                 return false, locale('stable_full')
             end
@@ -741,7 +767,7 @@ lib.callback.register('rsg-stables:server:transferHorse', function(source, horse
         if horse.stable == newStable then return false, locale('already_stabled_there') end
         if not nearStableByName(source, horse.stable) then return false, locale('not_close_to_stable') end
 
-        local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE stable = ?', { newStable })
+        local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE citizenid = ? AND stable = ?', { Player.PlayerData.citizenid, newStable })
         if atStable and atStable >= Config.MaxHorsesPerStable then
             return false, locale('destination_full')
         end
@@ -950,7 +976,7 @@ lib.callback.register('rsg-stables:server:collectFoal', function(source, breedin
         local owned = countOwnedHorses(Player.PlayerData.citizenid)
         if owned >= Config.MaxOwnedHorses then return false, locale('horse_limit_reached') end
 
-        local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE stable = ?', { job.stable })
+        local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE citizenid = ? AND stable = ?', { Player.PlayerData.citizenid, job.stable })
         if atStable and atStable >= Config.MaxHorsesPerStable then
             return false, locale('foal_stable_full')
         end
@@ -994,4 +1020,34 @@ lib.callback.register('rsg-stables:server:collectFoal', function(source, breedin
 
         return true
     end)
+end)
+
+
+-- ===================== HORSE INVENTORY =====================
+-- Opens the rsg-inventory stash for the player's active (checked-out) horse.
+RegisterNetEvent('rsg-stables:server:openHorseInventory', function(horseId, horseNetId)
+    local src = source
+    if not Config.HorseInventory or not Config.HorseInventory.enabled then return end
+    horseId = toId(horseId)
+    if not horseId then return end
+
+    -- the player must actually be standing next to the horse entity (stops remote stash access)
+    local horseEntity = tonumber(horseNetId) and NetworkGetEntityFromNetworkId(tonumber(horseNetId)) or 0
+    local ped = GetPlayerPed(src)
+    if not horseEntity or horseEntity == 0 or not DoesEntityExist(horseEntity) or ped == 0 then return end
+    if #(GetEntityCoords(ped) - GetEntityCoords(horseEntity)) > (Config.HorseInventory.distance or 2.5) + 2.0 then return end
+
+    local Player = RSGCore.Functions.GetPlayer(src)
+    if not Player then return end
+
+    local row = MySQL.single.await('SELECT id, name FROM rsg_stables_horses WHERE id = ? AND citizenid = ? AND active = 1 LIMIT 1', {
+        horseId, Player.PlayerData.citizenid
+    })
+    if not row then return end
+
+    exports['rsg-inventory']:OpenInventory(src, 'horse_' .. row.id, {
+        label = row.name or locale('your_horse'),
+        maxweight = Config.HorseInventory.maxweight,
+        slots = Config.HorseInventory.slots,
+    })
 end)

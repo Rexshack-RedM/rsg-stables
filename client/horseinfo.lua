@@ -381,8 +381,13 @@ end
 -- listener
 CreateThread(function()
     while true do
-        Wait(0)
-        UpdateAnimalInfoThisFrame()
+        -- only poll every frame while the player is focusing an animal (prompt 35) or a card is open
+        if m_InfoCardData.bShowing or GetIsPlayerUiPromptActive(PlayerId(), 35) == 1 then
+            Wait(0)
+            UpdateAnimalInfoThisFrame()
+        else
+            Wait(150)
+        end
     end
 end)
 
