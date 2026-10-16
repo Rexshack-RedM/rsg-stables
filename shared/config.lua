@@ -1533,19 +1533,6 @@ Config.Breeds = {
         speed = 6,
         acceleration = 5,
         description = 'Turkomans are multi-class war and race horses combining slender builds with high endurance, top-tier speed, and sturdy health.'
-    },
-    {
-        model = `a_c_horse_turkoman_silverbay`,
-        label = 'Turkoman (Silver Bay)',
-        class = 'Multi-Class War/Race',
-        breed = 'turkoman',
-        price = 950,
-        handling = 'Standard',
-        health = 7,
-        stamina = 5,
-        speed = 6,
-        acceleration = 5,
-        description = 'Turkomans are multi-class war and race horses combining slender builds with high endurance, top-tier speed, and sturdy health.'
     }
 }
 
