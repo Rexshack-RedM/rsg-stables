@@ -11,6 +11,7 @@ Config.ReviveCost          = 40     -- $ cost to revive/replace a dead insured h
 Config.StoreDistance       = 8.0    -- max distance player's mount can be from stable to store it
 Config.PaymentAccount      = 'cash' -- 'cash' or 'bank'
 Config.WhistleStopDistance = 1.0 -- whistled horse stops this many meters in front of the player (measured to the horse's nose)
+Config.WhistleAnim = 'WHISTLEHORSESHORT' -- whistle sound + animation played on H ('WHISTLEHORSESHORT', 'WHISTLEHORSELONG', 'WHISTLEHORSEDOUBLE'), false to disable
 Config.WhistleTeleportDistance = 60.0 -- if the active horse is farther than this when whistled, it's moved near the player instead of walking/running over
 Config.AllowTwoPlayersRide = false
 

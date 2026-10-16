@@ -202,6 +202,11 @@ local function pollWhistle()
     if not whistlePressed() then return end
     if IsPedDeadOrDying(cache.ped, true) then return end
 
+    -- script-spawned horses don't trigger the game's own whistle, so play it ourselves
+    if Config.WhistleAnim ~= false and not IsPedInAnyVehicle(cache.ped, false) then
+        TaskWhistleAnim(cache.ped, joaat(Config.WhistleAnim or 'WHISTLEHORSESHORT'), joaat('UNSPECIFIED'))
+    end
+
     -- activeHorse is set but the game removed the entity (culled, cleaned up, etc.):
     -- fall back to a recall so the whistle still brings the horse back
     if activeHorse and not (activeHorse.entity and DoesEntityExist(activeHorse.entity)) then
