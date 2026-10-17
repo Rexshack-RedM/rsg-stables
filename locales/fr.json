@@ -275,5 +275,13 @@
     "release_horse": "Libérer le cheval",
     "release_horse_desc": "Retire définitivement ce cheval décédé de ton écurie et libère une place.",
     "horse_released": "%s repose désormais en paix.",
-    "release_failed": "Impossible de libérer le cheval."
+    "release_failed": "Impossible de libérer le cheval.",
+    "claim_wild_horse": "Réclamer le cheval sauvage",
+    "claim_wild_horse_name": "Nomme ton nouveau cheval",
+    "wild_not_broken": "Tu n'as pas dressé ce cheval",
+    "wild_expired": "Tu as mis trop de temps, ce cheval ne peut plus être réclamé",
+    "wild_too_far": "Rapproche le cheval de l'écurie",
+    "wild_not_claimable": "Ce cheval ne peut pas être enregistré ici",
+    "wild_claimed": "%s est maintenant enregistré dans cette écurie",
+    "wild_horse_broken": "Cheval dressé ! Monte-le jusqu'à une écurie pour le réclamer"
 }

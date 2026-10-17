@@ -130,6 +130,16 @@ Config.HorseFlee = {
     respawnDistance  = 15.0,  -- distance behind the player a fled horse is respawned at before it runs over (whistle recall)
 }
 
+-- ===================== WILD HORSES =====================
+-- Break a wild horse (the game's taming minigame), ride it to any stable and choose
+-- "Claim Wild Horse" at the stable hand. Only breeds listed in Config.Breeds can be claimed.
+Config.WildHorse = {
+    enabled       = true,
+    claimFee      = 0,        -- $ paperwork fee to register the horse (0 = free), taken from Config.PaymentAccount
+    claimWindow   = 30 * 60,  -- seconds after breaking it the horse can still be claimed
+    horseDistance = 15.0,     -- the broken horse must be this close to the player (and the stable) to claim it
+}
+
 -- ===================== BREEDING =====================
 Config.Breeding = {
     enabled       = true,

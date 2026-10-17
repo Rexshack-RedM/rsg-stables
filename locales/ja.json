@@ -275,5 +275,13 @@
     "release_horse": "馬を手放す",
     "release_horse_desc": "この死んだ馬を厩舎から完全に削除し、所有枠を空けます。",
     "horse_released": "%s は安らかに眠りました。",
-    "release_failed": "馬を手放せませんでした。"
+    "release_failed": "馬を手放せませんでした。",
+    "claim_wild_horse": "野生の馬を登録する",
+    "claim_wild_horse_name": "新しい馬に名前を付けてください",
+    "wild_not_broken": "この馬を調教していません",
+    "wild_expired": "時間がかかりすぎたため、この馬は登録できなくなりました",
+    "wild_too_far": "馬を厩舎に近づけてください",
+    "wild_not_claimable": "この馬はここでは登録できません",
+    "wild_claimed": "%s はこの厩舎に登録されました",
+    "wild_horse_broken": "馬を調教しました！厩舎まで乗って行って登録しましょう"
 }

@@ -275,5 +275,13 @@
     "release_horse": "Pferd freigeben",
     "release_horse_desc": "Entfernt dieses verstorbene Pferd endgültig aus deinem Stall und gibt einen Pferdeplatz frei.",
     "horse_released": "%s wurde zur Ruhe gebettet.",
-    "release_failed": "Das Pferd konnte nicht freigegeben werden."
+    "release_failed": "Das Pferd konnte nicht freigegeben werden.",
+    "claim_wild_horse": "Wildpferd beanspruchen",
+    "claim_wild_horse_name": "Benenne dein neues Pferd",
+    "wild_not_broken": "Du hast dieses Pferd nicht zugeritten",
+    "wild_expired": "Du hast zu lange gebraucht, dieses Pferd kann nicht mehr beansprucht werden",
+    "wild_too_far": "Bring das Pferd näher an den Stall",
+    "wild_not_claimable": "Dieses Pferd kann hier nicht registriert werden",
+    "wild_claimed": "%s ist jetzt in diesem Stall registriert",
+    "wild_horse_broken": "Pferd zugeritten! Reite zu einem Stall, um es zu beanspruchen"
 }

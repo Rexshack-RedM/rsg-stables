@@ -27,6 +27,7 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 - **Whistle recall** – whistle (H) to call your horse; it walks up and stops just in front of you, facing you. Teleports closer first if it's too far away, and respawns it if the game has removed it.
 - **Persistent active horse** – position is saved to the database while out, so it survives logouts and resource restarts.
 - **Flee horse** – send your horse away; optionally return it to the stable automatically.
+- **Wild horses** – break a wild horse with the game's taming minigame, ride it to any stable and choose **Claim Wild Horse** at the stablehand to name it and register it. Validated server-side (breed must be in `Config.Breeds`, you must have broken it, claim window, distance and ownership limits).
 - **Breeding** – breed a stallion and a mare (adults only) to produce a foal after one real-life day. Foals inherit the parents' averaged stats with a chance to take the better parent's. Parents are locked while breeding and rest afterwards.
 - **Horse info card** – native animal info card showing horse stats.
 - **Store command** – `/storehorse` to put your active horse away near a stable.
@@ -105,6 +106,7 @@ All settings live in `shared/config.lua`.
 | `Config.HorseInventory` | Saddlebag stash on/off, max weight, slots, target distance and `nativeCargoPrompt` (B opens the stash) |
 | `Config.HorseBonding` | Bonding gained per feed / water / brush |
 | `Config.HorseFlee` | Flee delay, whether fled horses are stored, respawn distance |
+| `Config.WildHorse` | Wild horse claiming on/off, registration fee, claim window after breaking, max horse distance |
 | `Config.Breeding` | Cost, foal timer, same-stable, stallion + mare requirement, parent lock and cooldown, stat variance, better-parent chance |
 | `Config.HorseAging` | Young/Old thresholds, lifespan, "days left" warning, minimum stamina for the oldest horses |
 | `Config.HorseGive` | Give/sell to player on/off, distance, giver fee, accept timeout, max asking price |
@@ -163,6 +165,7 @@ Walk up to the stablehand and use **ox_target → Manage Stable** to open the me
 - **Customise tack** and **coat**.
 - **Breed** a stallion and a mare and collect the foal when ready.
 - **Give to Player** – give or sell a horse to someone standing next to you.
+- **Claim Wild Horse** – shown when you've just broken a wild horse and it's with you; name it and it's added to that stable.
 
 Each horse in the list shows its gender, stage (Young / Adult / Old, with days left near the end of its life) and health/stamina.
 

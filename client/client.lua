@@ -1115,6 +1115,17 @@ local function setupStables()
                         OpenStableMenu(stable)
                     end,
                 },
+                {
+                    name = 'rsg_stables_claim_' .. stable.name,
+                    icon = 'fas fa-hat-cowboy',
+                    label = locale('claim_wild_horse'),
+                    canInteract = function()
+                        return Config.WildHorse and Config.WildHorse.enabled and GetBrokenWildHorse() ~= nil
+                    end,
+                    onSelect = function()
+                        ClaimWildHorse(stable)
+                    end,
+                },
             })
 
             stableBlips[#stableBlips + 1] = AddLocationBlip(
@@ -1208,6 +1219,29 @@ local function NuiAlert(header, content, onClose)
     OpenNUI()
     pendingAlertClose = onClose
     SendNUIMessage({ action = 'alertDialog', header = header, content = content })
+end
+
+-- ===================== WILD HORSE CLAIM =====================
+-- global so the stable-ped target (defined above) can reach it at runtime
+function ClaimWildHorse(stable)
+    local horse = GetBrokenWildHorse()
+    if not horse then return end
+    NuiInput(locale('claim_wild_horse_name'), locale('unnamed_horse'), function(name)
+        CloseNUI()
+        local netId = NetworkGetNetworkIdFromEntity(horse)
+        local ok, result = lib.callback.await('rsg-stables:server:claimWildHorse', false, stable.name, netId, name)
+        if ok then
+            ForgetBrokenWildHorse()
+            if IsPedOnMount(cache.ped) and GetMount(cache.ped) == horse then
+                TaskDismountAnimal(cache.ped, 1, 0, 0, 0, 0)
+            end
+            lib.notify({ description = locale('wild_claimed', result), type = 'success' })
+        else
+            lib.notify({ description = result or locale('generic_error'), type = 'error' })
+        end
+    end, function()
+        CloseNUI()
+    end)
 end
 
 NuiStatsDialog = function(header, stats, onClose)
@@ -2616,8 +2650,10 @@ CreateThread(function()
         if activeHorse and DoesEntityExist(activeHorse.entity) then
             if IsEntityDead(activeHorse.entity) then
                 local dbId = activeHorse.dbId
+                local netId = NetworkGetEntityIsNetworked(activeHorse.entity) and NetworkGetNetworkIdFromEntity(activeHorse.entity) or nil
+                -- report before despawning so the server can confirm the entity is really dead
+                lib.callback.await('rsg-stables:server:horseDied', false, dbId, netId)
                 despawnActiveHorseEntity()
-                lib.callback.await('rsg-stables:server:horseDied', false, dbId)
             end
         end
     end

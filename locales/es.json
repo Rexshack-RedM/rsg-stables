@@ -275,5 +275,13 @@
     "release_horse": "Liberar caballo",
     "release_horse_desc": "Retira definitivamente este caballo fallecido de tu establo y libera una plaza.",
     "horse_released": "%s descansa en paz.",
-    "release_failed": "No se pudo liberar el caballo."
+    "release_failed": "No se pudo liberar el caballo.",
+    "claim_wild_horse": "Reclamar caballo salvaje",
+    "claim_wild_horse_name": "Ponle nombre a tu nuevo caballo",
+    "wild_not_broken": "No has domado este caballo",
+    "wild_expired": "Tardaste demasiado, ya no puedes reclamar este caballo",
+    "wild_too_far": "Acerca el caballo al establo",
+    "wild_not_claimable": "Este caballo no se puede registrar aquí",
+    "wild_claimed": "%s ya está registrado en este establo",
+    "wild_horse_broken": "¡Caballo domado! Llévalo a un establo para reclamarlo"
 }

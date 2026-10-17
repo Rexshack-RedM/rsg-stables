@@ -275,5 +275,13 @@
     "release_horse": "Paard vrijgeven",
     "release_horse_desc": "Verwijder dit overleden paard definitief uit je stal en maak een plek vrij.",
     "horse_released": "%s is te ruste gelegd.",
-    "release_failed": "Het paard kon niet worden vrijgegeven."
+    "release_failed": "Het paard kon niet worden vrijgegeven.",
+    "claim_wild_horse": "Wild paard claimen",
+    "claim_wild_horse_name": "Geef je nieuwe paard een naam",
+    "wild_not_broken": "Je hebt dit paard niet getemd",
+    "wild_expired": "Je deed er te lang over, dit paard kan niet meer geclaimd worden",
+    "wild_too_far": "Breng het paard dichter bij de stal",
+    "wild_not_claimable": "Dit paard kan hier niet geregistreerd worden",
+    "wild_claimed": "%s is nu geregistreerd bij deze stal",
+    "wild_horse_broken": "Paard getemd! Rijd naar een stal om het te claimen"
 }

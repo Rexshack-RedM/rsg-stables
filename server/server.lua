@@ -628,7 +628,7 @@ lib.callback.register('rsg-stables:server:buyHorse', function(source, stableName
                         (citizenid, stable, model, breed_label, gender, name, outfit, tack, health, stamina, speed, accel, handling, maxhealth, alive, insured, active)
                     VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 100, 100, ?, ?, ?, ?, 1, 0, 0)
                 ]], {
-                    Player.PlayerData.citizenid, stableName, model, breed.label, gender, safeName, safeOutfit,
+                    Player.PlayerData.citizenid, stableName, breed.model, breed.label, gender, safeName, safeOutfit,
                     breed.speed, breed.acceleration, breedHandlingValue(breed), breed.health
                 })
             end)
@@ -642,6 +642,120 @@ lib.callback.register('rsg-stables:server:buyHorse', function(source, stableName
             end
 
             return true, insertId
+        end)
+    end)
+end)
+
+-- ===================== WILD HORSE CLAIM =====================
+-- brokenWild[src] = { netId = int, at = os.time() }  (one pending horse per player)
+local brokenWild = {}
+local POP_MISSION = 7 -- population type of script-created peds (owned / spawned horses)
+
+local function isClaimableEntity(entity)
+    if not entity or entity == 0 or not DoesEntityExist(entity) then return false end
+    if GetEntityType(entity) ~= 1 then return false end -- must be a ped
+    if GetEntityPopulationType and GetEntityPopulationType(entity) == POP_MISSION then return false end
+    if IsPedAPlayer(entity) then return false end
+    return true
+end
+
+RegisterNetEvent('rsg-stables:server:wildHorseBroken', function(netId)
+    local src = source
+    if not (Config.WildHorse and Config.WildHorse.enabled) then return end
+    netId = toId(netId)
+    if not netId then return end
+    local entity = NetworkGetEntityFromNetworkId(netId)
+    if not isClaimableEntity(entity) then return end
+    if not getBreedConfig(GetEntityModel(entity)) then return end
+    -- must be next to the horse when it's broken
+    local dist = #(GetEntityCoords(GetPlayerPed(src)) - GetEntityCoords(entity))
+    if dist > 5.0 then return end
+    -- the same horse can't be registered by two players
+    for other, rec in pairs(brokenWild) do
+        if other ~= src and rec.netId == netId then return end
+    end
+    brokenWild[src] = { netId = netId, at = os.time() }
+end)
+
+AddEventHandler('playerDropped', function()
+    brokenWild[source] = nil
+end)
+
+lib.callback.register('rsg-stables:server:claimWildHorse', function(source, stableName, netId, horseName)
+    local cfg = Config.WildHorse
+    if not (cfg and cfg.enabled) then return false, locale('wild_not_claimable') end
+
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player then return false, locale('player_not_found') end
+
+    local stable = getStableConfig(stableName)
+    if not stable then return false, locale('invalid_stable') end
+    if not isNearStable(source, stable) then return false, locale('not_close_to_stable') end
+
+    netId = toId(netId)
+    local rec = brokenWild[source]
+    if not netId or not rec or rec.netId ~= netId then return false, locale('wild_not_broken') end
+    if os.time() - rec.at > (cfg.claimWindow or 1800) then
+        brokenWild[source] = nil
+        return false, locale('wild_expired')
+    end
+
+    local entity = NetworkGetEntityFromNetworkId(netId)
+    if not isClaimableEntity(entity) then
+        brokenWild[source] = nil
+        return false, locale('wild_not_claimable')
+    end
+
+    local model = GetEntityModel(entity)
+    local breed = getBreedConfig(model)
+    if not breed then return false, locale('wild_not_claimable') end
+
+    local horseCoords = GetEntityCoords(entity)
+    local maxDist = cfg.horseDistance or 15.0
+    if #(GetEntityCoords(GetPlayerPed(source)) - horseCoords) > maxDist
+        or not isNearStable(source, stable, STABLE_INTERACT_DISTANCE + maxDist) then
+        return false, locale('wild_too_far')
+    end
+
+    local citizenid = Player.PlayerData.citizenid
+    return withLock('citizen:' .. citizenid, function()
+        if countOwnedHorses(citizenid) >= Config.MaxOwnedHorses then
+            return false, locale('max_horses_owned', Config.MaxOwnedHorses)
+        end
+        return withLock('stable:' .. stableName, function()
+            local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE citizenid = ? AND stable = ?', { citizenid, stableName })
+            if atStable and atStable >= Config.MaxHorsesPerStable then
+                return false, locale('stable_full')
+            end
+
+            local fee = tonumber(cfg.claimFee) or 0
+            if fee > 0 and not chargePlayer(Player, fee) then
+                return false, locale('insufficient_funds')
+            end
+
+            local safeName = (sanitizeName(horseName) or locale('unnamed_horse')):sub(1, 40)
+
+            local ok, insertId = pcall(function()
+                return MySQL.insert.await([[
+                    INSERT INTO rsg_stables_horses
+                        (citizenid, stable, model, breed_label, gender, name, outfit, tack, health, stamina, speed, accel, handling, maxhealth, alive, insured, active)
+                    VALUES (?, ?, ?, ?, ?, ?, 0, '{}', 100, 100, ?, ?, ?, ?, 1, 0, 0)
+                ]], {
+                    citizenid, stableName, breed.model, breed.label, randomGender(), safeName,
+                    breed.speed, breed.acceleration, breedHandlingValue(breed), breed.health
+                })
+            end)
+
+            if not ok or not insertId or insertId == 0 then
+                print(('[rsg-stables] ERROR: claimWildHorse insert failed for citizenid %s: %s'):format(citizenid, tostring(insertId)))
+                if fee > 0 then Player.Functions.AddMoney(Config.PaymentAccount, fee, 'rsg-stables-refund') end
+                return false, locale('buy_save_failed')
+            end
+
+            brokenWild[source] = nil
+            -- the wild horse goes into the stable: remove the world entity
+            if DoesEntityExist(entity) then DeleteEntity(entity) end
+            return true, safeName
         end)
     end)
 end)
@@ -718,11 +832,18 @@ lib.callback.register('rsg-stables:server:fleeStoreHorse', function(source, hors
     return storeActive(source, horseId, health, stamina, false)
 end)
 
-lib.callback.register('rsg-stables:server:horseDied', function(source, horseId)
+lib.callback.register('rsg-stables:server:horseDied', function(source, horseId, netId)
     local Player = RSGCore.Functions.GetPlayer(source)
     if not Player then return false end
     horseId = toId(horseId)
     if not horseId then return false end
+
+    -- a living horse can't be reported dead (stops a free insured heal + store-from-anywhere)
+    netId = toId(netId)
+    local entity = netId and NetworkGetEntityFromNetworkId(netId) or 0
+    if entity ~= 0 and DoesEntityExist(entity) and GetEntityHealth(entity) > 0 then
+        return false
+    end
 
     return withLock('citizen:' .. Player.PlayerData.citizenid, function()
         -- only the horse that is actually out can die (stops a client killing/"insurance-healing" stabled horses)

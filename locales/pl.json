@@ -275,5 +275,13 @@
     "release_horse": "Zwolnij konia",
     "release_horse_desc": "Usuń na stałe tego martwego konia ze stajni i zwolnij miejsce.",
     "horse_released": "%s spoczywa w pokoju.",
-    "release_failed": "Nie udało się zwolnić konia."
+    "release_failed": "Nie udało się zwolnić konia.",
+    "claim_wild_horse": "Przygarnij dzikiego konia",
+    "claim_wild_horse_name": "Nazwij swojego nowego konia",
+    "wild_not_broken": "Nie ujeździłeś tego konia",
+    "wild_expired": "Zajęło ci to za długo, nie możesz już przygarnąć tego konia",
+    "wild_too_far": "Podprowadź konia bliżej stajni",
+    "wild_not_claimable": "Tego konia nie można tu zarejestrować",
+    "wild_claimed": "%s jest teraz zarejestrowany w tej stajni",
+    "wild_horse_broken": "Koń ujeżdżony! Jedź do stajni, aby go przygarnąć"
 }
