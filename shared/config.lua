@@ -36,7 +36,7 @@ Config.HorseFeedItems = {
 }
 
 Config.HorseDrinkItems = {
-    { item = 'waterbucket', label = 'Water Bucket', thirst = 50, stamina = 10 },
+    { item = 'fullbucket', label = 'Water Bucket', thirst = 50, stamina = 10 },
 }
 
 -- ===================== HORSE STIMULANT =====================
@@ -76,8 +76,27 @@ Config.HorseNaturalDrink = {
     troughRadius    = 2.5,   -- how close the horse must be to a trough prop
     allowMounted    = true,  -- drink while the player is still in the saddle
     troughModels = {
-        'p_watertrough01x', 'p_watertrough02x', 'p_watertrough03x',
-        'p_watertroughsml01x', 'p_horsetrough01x',
+        'p_watertrough01x', 'p_watertrough01x_new', 'p_watertrough02x', 'p_watertrough03x', 'p_watertroughsml01x',
+    },
+}
+
+-- ===================== NATURAL GRAZING (hay near the player) =====================
+Config.HorseNaturalGraze = {
+    enabled         = true,
+    hungerThreshold = 40,     -- horse only goes looking for hay when hunger is at/below this
+    hungerRestore   = 100,    -- hunger is restored to this value (0-100)
+    checkInterval   = 3000,   -- ms between checks for nearby hay
+    searchRadius    = 15.0,   -- how far from the PLAYER the horse will wander to find hay
+    eatDistance     = 1.8,    -- how close the horse gets to the hay before eating
+    walkTimeout     = 15000,  -- ms the horse gets to reach the hay before giving up
+    eatDuration     = 10000,  -- ms the eating animation plays
+    cooldown        = 120000, -- ms before the horse can graze naturally again
+    eatAnim = { dict = 'amb_creature_mammal@world_horse_grazing@base', clip = 'base' },
+    hayModels = {             -- world props the horse will eat from (add/remove as you like)
+        'p_haybale01x', 'mp001_p_mp_haybalecover01x', 'mp001_p_mp_haybalecover03x',  'p_gndblnd_hay01x', 'p_gndblnd_hay02x',
+        'p_gndblnd_hay03x', 'p_haybale03x', 'p_haybale04x',  'p_haybalecover01x', 'p_haybalecover02x', 'p_haybalecover03x',
+        'p_haypile_wag01x', 'p_haypile01x', 'p_haypile02x',  'p_haypile03x', 'p_haypile04x', 's_haybale01x', 'p_feedtrough01x',
+		'p_feedtroughsml01x',
     },
 }
 
@@ -101,6 +120,7 @@ Config.HorseInventory = {
     maxweight = 40000,    -- stash max weight (grams)
     slots     = 20,       -- stash slots
     distance  = 2.5,      -- ox_target interaction distance
+    nativeCargoPrompt = true, -- the game's Horse Cargo prompt (B) beside the horse opens this stash
 }
 
 -- ===================== FLEE =====================
@@ -116,8 +136,34 @@ Config.HorseFlee = {
 Config.Breeding = {
     enabled       = true,
     cost          = 60,             -- $ cost to start breeding two horses
-    time          = 15 * 60 * 1000, -- ms until foal is ready (15 minutes)
+    time          = 24 * 60 * 60 * 1000, -- ms until foal is ready (1 real-life day)
     sameStableOnly = true,          -- both parent horses must be stabled at the same location
+    requireOppositeGender = true,   -- parents must be one stallion (male) and one mare (female)
+    lockParents   = true,           -- parents can't be taken out or transferred until the foal is collected
+    parentCooldown = 60 * 60 * 1000,-- ms after a breeding starts before either parent can breed again (0 = none)
+    statVariance  = 1,              -- foal stats = parents' average +/- this many points (stats use the 1..Config.BreedStatMax scale)
+    betterParentChance = 25,        -- % chance per stat that the foal inherits the BETTER parent's value instead of the average
+}
+
+-- ===================== AGING / LIFESPAN =====================
+-- Age is counted in real-life days since the horse was bought (or born as a foal).
+Config.HorseAging = {
+    enabled       = true,
+    youngUntilDays = 7,      -- 0..6 days owned = Young (can't breed)
+    oldFromDays    = 60,     -- 60+ days owned  = Old (can't breed)
+    lifespanDays   = 90,     -- at this age the horse dies of natural causes (can't be revived or insured back)
+    warnDays       = 7,
+    oldMinStamina  = 40,     -- stamina core cap (%) an old horse falls to by the end of its life; starts at 100 on the first 'old' day and drops each day      -- show "X days left" on old horses within this many days of their lifespan
+    checkInterval  = 10 * 60 * 1000, -- ms between server checks for horses that have reached their lifespan
+}
+
+-- ===================== GIVE HORSE TO ANOTHER PLAYER =====================
+Config.HorseGive = {
+    enabled  = true,
+    distance = 5.0,    -- the other player must be standing this close to you (at the stable)
+    fee      = 0,      -- $ paperwork fee charged to the giver (0 = free)
+    timeout  = 30000,  -- ms the receiving player has to accept
+    maxPrice = 100000, -- highest asking price a player can set (0 / blank = free)
 }
 
 -- ===================== STABLES =====================
@@ -1581,7 +1627,7 @@ Config.TackCategories = {
     { key = 'mane',       label = 'Mane' },
     { key = 'mask',       label = 'Mask' },
     { key = 'mustache',   label = 'Mustache' },
-    { key = 'holster',    label = 'Holster' },
+    { key = 'holster',    label = 'Holster', required = true }, -- required = a style must be fitted (no 'None'); the holster is needed to carry weapons on the horse
     { key = 'bridle',     label = 'Bridle' },
     { key = 'horseshoe',  label = 'Horseshoes' },
 }

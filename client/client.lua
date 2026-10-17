@@ -97,10 +97,12 @@ local function AddLocationBlip(x, y, z, sprite, color, scale, label)
     return blip
 end
 
-local function fmtTimeLeft(readyAt)
-    local msLeft = readyAt - (os.time() * 1000)
+local function fmtTimeLeft(msLeft)
     if msLeft <= 0 then return locale('time_ready') end
     local mins = math.ceil(msLeft / 60000)
+    if mins >= 60 then
+        return locale('time_hours_minutes', mins // 60, mins % 60)
+    end
     return locale('time_minutes', mins)
 end
 
@@ -804,6 +806,16 @@ CreateThread(function()
                 DisableControlAction(0, `INPUT_INTERACT_HORSE_FEED`, true)
             end
 
+            -- native Horse Cargo prompt (B) opens the horse's rsg-inventory stash instead
+            if Config.HorseInventory.enabled and Config.HorseInventory.nativeCargoPrompt and activeHorse and DoesEntityExist(activeHorse.entity)
+                and not IsNuiFocused() then
+                local ped = cache.ped
+                if not IsPedOnMount(ped) and #(GetEntityCoords(ped) - GetEntityCoords(activeHorse.entity)) < 3.0
+                    and IsControlJustReleased(0, 0x5966D52A) then -- INPUT_OPEN_SATCHEL_HORSE_MENU
+                    TriggerServerEvent('rsg-stables:server:openHorseInventory', activeHorse.dbId, NetworkGetNetworkIdFromEntity(activeHorse.entity))
+                end
+            end
+
             if activeHorse and DoesEntityExist(activeHorse.entity) then
                 local numEvents = GetNumberOfEvents(0)
                 if numEvents > 0 then
@@ -980,6 +992,7 @@ local function spawnHorse(horse, coords)
         hunger = math.max(0, math.min(100, tonumber(horse.hunger) or 100)),
         thirst = math.max(0, math.min(100, tonumber(horse.thirst) or 100)),
         bonding = math.max(0, math.min(100, tonumber(horse.bonding) or 0)),
+        ageDays = tonumber(horse.age_days) or 0,
     }
     pushBondingToNative(horsePed)
     pendingHorse = nil
@@ -1342,6 +1355,7 @@ function OpenStableMenu(stable)
 
     local aliveCount = 0
     for _, horse in ipairs(horses) do
+        horse.alive = horse.alive == true or horse.alive == 1
         if horse.alive then aliveCount = aliveCount + 1 end
     end
     if aliveCount >= 2 and Config.Breeding.enabled then
@@ -1356,9 +1370,9 @@ function OpenStableMenu(stable)
     end
 
     for _, job in ipairs(breedingJobs) do
-        local ready = (job.ready_at <= (os.time() * 1000))
+        local ready = job.ready == true
         table.insert(options, {
-            title = ready and locale('collect_foal') or locale('foal_growing', fmtTimeLeft(job.ready_at)),
+            title = ready and locale('collect_foal') or locale('foal_growing', fmtTimeLeft(job.ms_left or 0)),
             description = ready and locale('foal_ready') or locale('foal_still_growing'),
             icon = 'foal',
             disabled = not ready,
@@ -1378,9 +1392,19 @@ function OpenStableMenu(stable)
         local desc, badge
         if horse.alive then
             desc = locale('horse_health_stamina', horse.health, horse.stamina)
+            if horse.gender then desc = locale(horse.gender == 'male' and 'gender_stallion' or 'gender_mare') .. ' • ' .. desc end
+            if horse.stage then
+                local stageText = locale('stage_' .. horse.stage)
+                local cfgA = Config.HorseAging
+                local left = (cfgA.lifespanDays or 0) - (tonumber(horse.age_days) or 0)
+                if horse.stage == 'old' and left <= (cfgA.warnDays or 7) then
+                    stageText = stageText .. ' (' .. locale('days_left', math.max(left, 0)) .. ')'
+                end
+                desc = stageText .. ' • ' .. desc
+            end
             badge = nil
         else
-            desc = locale('deceased')
+            desc = (horse.died_of_age == true or horse.died_of_age == 1) and locale('died_of_old_age') or locale('deceased')
             badge = locale('deceased')
         end
         table.insert(options, {
@@ -1653,13 +1677,28 @@ local function showBreedPreviewContext(stable, breed)
                         return
                     end
     
-                    local ok, result = lib.callback.await('rsg-stables:server:buyHorse', false, stable.name, breed.model, value, 0)
-                    if ok then
-                        NuiNotify(locale('purchase_success', value), 'success')
-                    else
-                        NuiNotify(result or locale('purchase_fail'), 'error')
+                    local function buy(gender)
+                        local ok, result = lib.callback.await('rsg-stables:server:buyHorse', false, stable.name, breed.model, value, 0, gender)
+                        if ok then
+                            NuiNotify(locale('purchase_success', value), 'success')
+                        else
+                            NuiNotify(result or locale('purchase_fail'), 'error')
+                        end
+                        OpenStableMenu(stable)
                     end
-                    OpenStableMenu(stable)
+
+                    NuiRender({
+                        title = locale('choose_gender'),
+                        subtitle = value,
+                        back = function()
+                            spawnPreviewHorse(breed.model, stable.previewCoords)
+                            showBreedPreviewContext(stable, breed)
+                        end,
+                        options = {
+                            { title = locale('gender_stallion'), description = locale('gender_stallion_desc'), icon = 'mars',  onSelect = function() buy('male') end },
+                            { title = locale('gender_mare'),     description = locale('gender_mare_desc'),     icon = 'venus', onSelect = function() buy('female') end },
+                        },
+                    })
                 end, function()
                     spawnPreviewHorse(breed.model, stable.previewCoords)
                     showBreedPreviewContext(stable, breed)
@@ -1688,7 +1727,7 @@ end
 function OpenBreedingMenu(stable, horses)
     local alive = {}
     for _, h in ipairs(horses) do
-        if h.alive then table.insert(alive, h) end
+        if h.alive and h.stage ~= 'young' and h.stage ~= 'old' then table.insert(alive, h) end
     end
 
     if #alive < 2 then
@@ -1700,15 +1739,16 @@ function OpenBreedingMenu(stable, horses)
     for _, a in ipairs(alive) do
         table.insert(options, {
             title = a.name,
-            description = locale('select_first_parent'),
+            description = (a.gender and (locale(a.gender == 'male' and 'gender_stallion' or 'gender_mare') .. ' • ') or '') .. locale('select_first_parent'),
             icon = 'horse',
             onSelect = function()
                 local options2 = {}
                 for _, b in ipairs(alive) do
-                    if b.id ~= a.id then
+                    local genderOk = Config.Breeding.requireOppositeGender == false or (a.gender and b.gender and a.gender ~= b.gender)
+                    if b.id ~= a.id and genderOk then
                         table.insert(options2, {
                             title = b.name,
-                            description = locale('select_second_parent'),
+                            description = (b.gender and (locale(b.gender == 'male' and 'gender_stallion' or 'gender_mare') .. ' • ') or '') .. locale('select_second_parent'),
                             icon = 'horse',
                             onSelect = function()
                                 local ok, err = lib.callback.await('rsg-stables:server:startBreeding', false, stable.name, a.id, b.id)
@@ -1721,6 +1761,10 @@ function OpenBreedingMenu(stable, horses)
                             end,
                         })
                     end
+                end
+                if #options2 == 0 then
+                    NuiNotify(locale('breed_need_opposite_gender'), 'error')
+                    return
                 end
                 NuiRender({
                     title = locale('choose_second_parent'),
@@ -1852,33 +1896,36 @@ function showTackWizardStep(stable, horse, baseTack, selections, index)
     end
 
     local items = Config.TackItems[category.key] or {}
-    local styleCount = #items + 1 -- +1 for "None" at position 1
+    local required = category.required and #items > 0
+    local offset = required and 0 or 1 -- optional categories have "None" at position 1
+    local styleCount = #items + offset
 
     local pick = currentPick(baseTack, selections, category.key)
     local styleIndex = 1
     for i, item in ipairs(items) do
         if tostring(item.hash) == tostring(pick) then
-            styleIndex = i + 1
+            styleIndex = i + offset
             break
         end
     end
 
     local function applyCurrentStyle()
-        if styleIndex == 1 then
+        if styleIndex - offset < 1 then
             selections[category.key] = pick and 0 or nil
         else
-            selections[category.key] = items[styleIndex - 1].hash
+            local hash = items[styleIndex - offset].hash
+            selections[category.key] = (tostring(hash) ~= tostring(baseTack[category.key])) and hash or nil
         end
         refreshTackPreview(stable, horse, baseTack, selections)
     end
 
     local function sendStyleScreen()
         local label, meta
-        if styleIndex == 1 then
+        if styleIndex - offset < 1 then
             label = locale('none')
             meta = locale('tack_none_equipped', category.label:lower())
         else
-            local item = items[styleIndex - 1]
+            local item = items[styleIndex - offset]
             label = item.label
             meta = ('$%.2f'):format(item.price)
         end
@@ -2128,6 +2175,62 @@ function OpenHorseMenu(stable, horse)
                 })
             end,
         })
+
+        if Config.HorseGive and Config.HorseGive.enabled then
+            table.insert(options, {
+                title = locale('give_horse'),
+                description = (Config.HorseGive.fee or 0) > 0 and locale('give_horse_desc_fee', Config.HorseGive.fee) or locale('give_horse_desc'),
+                icon = 'heart',
+                onSelect = function()
+                    local players = lib.callback.await('rsg-stables:server:getNearbyPlayers', false) or {}
+                    if #players == 0 then
+                        NuiNotify(locale('give_no_players'), 'error')
+                        return
+                    end
+                    local playerOptions = {}
+                    for _, p in ipairs(players) do
+                        table.insert(playerOptions, {
+                            title = (p.name ~= '' and p.name) or ('#' .. p.id),
+                            description = locale('give_to_this_player'),
+                            icon = 'horse',
+                            onSelect = function()
+                                NuiInput(locale('give_set_price'), locale('give_price_placeholder'), function(value)
+                                    local price = 0
+                                    if value and value ~= '' then
+                                        price = tonumber((tostring(value):gsub('[%$,%s]', '')))
+                                        if not price or price < 0 or price ~= math.floor(price) then
+                                            NuiNotify(locale('give_price_invalid', Config.HorseGive.maxPrice or 100000), 'error')
+                                            OpenHorseMenu(stable, horse)
+                                            return
+                                        end
+                                    end
+                                    NuiNotify(locale('give_waiting'), 'inform')
+                                    local ok, err = lib.callback.await('rsg-stables:server:giveHorse', false, horse.id, p.id, price)
+                                    if ok then
+                                        if price > 0 then
+                                            NuiNotify(locale('give_sold', horse.name, p.name, price), 'success')
+                                        else
+                                            NuiNotify(locale('give_success', horse.name, p.name), 'success')
+                                        end
+                                    else
+                                        NuiNotify(err or locale('give_failed'), 'error')
+                                    end
+                                    OpenStableMenu(stable)
+                                end, function()
+                                    OpenHorseMenu(stable, horse)
+                                end)
+                            end,
+                        })
+                    end
+                    NuiRender({
+                        title = locale('give_horse'),
+                        subtitle = horse.name,
+                        back = function() OpenHorseMenu(stable, horse) end,
+                        options = playerOptions,
+                    })
+                end,
+            })
+        end
     else
         table.insert(options, {
             title = locale('revive'),
@@ -2295,6 +2398,139 @@ CreateThread(function()
             stillSince = nil
         end
     end
+end)
+
+-- ===================== NATURAL GRAZING (hay near the player) =====================
+local naturalGrazing, lastNaturalGrazeAt = false, 0
+
+local function findHayNearPlayer(cfg)
+    local pc = GetEntityCoords(cache.ped)
+    local best, bestDist = nil, nil
+    for _, model in ipairs(cfg.hayModels or {}) do
+        local obj = GetClosestObjectOfType(pc.x, pc.y, pc.z, cfg.searchRadius or 15.0, joaat(model), false, false, false)
+        if obj and obj ~= 0 then
+            local d = #(GetEntityCoords(obj) - pc)
+            if not bestDist or d < bestDist then best, bestDist = obj, d end
+        end
+    end
+    return best
+end
+
+CreateThread(function()
+    while true do
+        local cfg = Config.HorseNaturalGraze
+        Wait((cfg and cfg.checkInterval) or 3000)
+
+        if cfg and cfg.enabled and not naturalGrazing and not naturalDrinking and activeHorse
+            and DoesEntityExist(activeHorse.entity) and not IsEntityDead(activeHorse.entity)
+            and not IsPedOnMount(cache.ped) and not IsPedInAnyVehicle(cache.ped, false)
+            and (activeHorse.hunger or 100) <= (cfg.hungerThreshold or 40)
+            and GetGameTimer() - lastNaturalGrazeAt >= (cfg.cooldown or 120000) then
+
+            local horse = activeHorse.entity
+            local nearPlayer = #(GetEntityCoords(horse) - GetEntityCoords(cache.ped)) <= (cfg.searchRadius or 15.0) * 2
+            local hay = nearPlayer and not IsPedRagdoll(horse) and findHayNearPlayer(cfg)
+            if hay then
+                naturalGrazing = true
+                lastNaturalGrazeAt = GetGameTimer()
+
+                -- wander over to the hay
+                local hc = GetEntityCoords(hay)
+                ClearPedTasks(horse)
+                TaskGoToCoordAnyMeans(horse, hc.x, hc.y, hc.z, 1.0, 0, false, 786603, 0xbf800000)
+                local deadline = GetGameTimer() + (cfg.walkTimeout or 15000)
+                local reached = false
+                while GetGameTimer() < deadline and DoesEntityExist(horse) and DoesEntityExist(hay) and not IsPedOnMount(cache.ped) do
+                    if #(GetEntityCoords(horse) - hc) <= (cfg.eatDistance or 1.8) + 0.5 then reached = true break end
+                    Wait(250)
+                end
+
+                if reached and DoesEntityExist(horse) and not IsPedOnMount(cache.ped) then
+                    ClearPedTasks(horse)
+                    TaskTurnPedToFaceEntity(horse, hay, 1500)
+                    Wait(1500)
+                    local ok, result = lib.callback.await('rsg-stables:server:naturalGraze', false)
+                    if ok and DoesEntityExist(horse) then
+                        local anim = cfg.eatAnim or {}
+                        if anim.dict and loadAnimDict(anim.dict) then
+                            FreezeEntityPosition(horse, true)
+                            TaskPlayAnim(horse, anim.dict, anim.clip or 'base', 2.0, -2.0, -1, 1, 0.0, false, false, false)
+                            Wait(cfg.eatDuration or 10000)
+                            if DoesEntityExist(horse) then
+                                StopAnimTask(horse, anim.dict, anim.clip or 'base', 1.0)
+                                FreezeEntityPosition(horse, false)
+                            end
+                            RemoveAnimDict(anim.dict)
+                        else
+                            Wait(cfg.eatDuration or 10000)
+                        end
+                        if activeHorse and activeHorse.entity == horse and result and result.hunger then
+                            activeHorse.hunger = result.hunger
+                        end
+                        lib.notify({ description = locale('horse_ate_hay'), type = 'success' })
+                    end
+                elseif DoesEntityExist(horse) then
+                    ClearPedTasks(horse)
+                end
+                naturalGrazing = false
+            end
+        end
+    end
+end)
+
+-- ===================== OLD AGE STAMINA =====================
+-- Old horses can't hold a full stamina core: the cap drops linearly from 100% on the first
+-- 'old' day to Config.HorseAging.oldMinStamina on the last day of their lifespan.
+local function oldAgeStaminaCap(ageDays)
+    local cfg = Config.HorseAging
+    if not (cfg and cfg.enabled) then return 100 end
+    local oldFrom, life = cfg.oldFromDays or 60, cfg.lifespanDays or 90
+    if ageDays < oldFrom or life <= oldFrom then return 100 end
+    local t = math.min(1.0, (ageDays - oldFrom) / (life - oldFrom))
+    return math.floor(100 - t * (100 - (cfg.oldMinStamina or 40)))
+end
+
+CreateThread(function()
+    while true do
+        Wait(2000)
+        if activeHorse and DoesEntityExist(activeHorse.entity) and not IsEntityDead(activeHorse.entity) then
+            local cap = oldAgeStaminaCap(activeHorse.ageDays or 0)
+            if cap < 100 and not stimulantActive() then -- the stimulant deliberately tops the core up; don't fight it
+                local core = tonumber(Citizen.InvokeNative(0x36731AC041289BB1, activeHorse.entity, 1)) or 0 -- _GET_ATTRIBUTE_CORE_VALUE (stamina)
+                if core > cap then
+                    Citizen.InvokeNative(0xC6258F41D86676E0, activeHorse.entity, 1, cap) -- _SET_ATTRIBUTE_CORE_VALUE (stamina)
+                end
+            end
+        end
+    end
+end)
+
+-- ===================== RECEIVING A HORSE FROM ANOTHER PLAYER =====================
+lib.callback.register('rsg-stables:client:confirmHorseGift', function(giverName, horseName, breedLabel, price)
+    local timeout = (Config.HorseGive and Config.HorseGive.timeout) or 30000
+    local answered = nil
+    SetTimeout(timeout, function()
+        if answered == nil then lib.closeAlertDialog() end
+    end)
+    local res = lib.alertDialog({
+        header = locale('give_offer_header'),
+        content = (price or 0) > 0
+            and locale('give_offer_content_price', giverName or '?', horseName or '?', breedLabel or '', price)
+            or locale('give_offer_content', giverName or '?', horseName or '?', breedLabel or ''),
+        centered = true,
+        cancel = true,
+        labels = { confirm = locale('give_accept'), cancel = locale('give_decline') },
+    })
+    answered = res
+    return res == 'confirm'
+end)
+
+-- ===================== NATURAL DEATH (old age) =====================
+RegisterNetEvent('rsg-stables:client:horseDiedOfAge', function(horseId, horseName)
+    if activeHorse and activeHorse.dbId == horseId then
+        despawnActiveHorseEntity()
+    end
+    lib.notify({ description = locale('horse_died_of_age', horseName or locale('your_horse')), type = 'error', duration = 10000 })
 end)
 
 -- ===================== DEATH DETECTION =====================

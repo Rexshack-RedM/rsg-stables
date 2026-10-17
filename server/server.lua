@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS `rsg_stables_horses` (
   `stable` VARCHAR(50) DEFAULT NULL,
   `model` VARCHAR(100) NOT NULL,
   `breed_label` VARCHAR(100) NOT NULL,
+  `gender` VARCHAR(6) DEFAULT NULL,
+  `breed_cooldown` BIGINT(20) NOT NULL DEFAULT 0,
+  `died_of_age` TINYINT(1) NOT NULL DEFAULT 0,
   `name` VARCHAR(50) NOT NULL DEFAULT 'Unnamed Horse',
   `outfit` INT(11) NOT NULL DEFAULT 0,
   `tack` TEXT DEFAULT NULL,
@@ -90,6 +93,18 @@ local function ensureDatabase()
         end
     end
 
+    if not existing.gender then
+        pcall(MySQL.query.await, 'ALTER TABLE `rsg_stables_horses` ADD COLUMN `gender` VARCHAR(6) DEFAULT NULL AFTER `breed_label`')
+    end
+    if not existing.breed_cooldown then
+        pcall(MySQL.query.await, 'ALTER TABLE `rsg_stables_horses` ADD COLUMN `breed_cooldown` BIGINT(20) NOT NULL DEFAULT 0 AFTER `gender`')
+    end
+    if not existing.died_of_age then
+        pcall(MySQL.query.await, 'ALTER TABLE `rsg_stables_horses` ADD COLUMN `died_of_age` TINYINT(1) NOT NULL DEFAULT 0 AFTER `breed_cooldown`')
+    end
+    -- horses bought before genders existed get a random one
+    pcall(MySQL.query.await, "UPDATE `rsg_stables_horses` SET `gender` = IF(RAND() < 0.5, 'male', 'female') WHERE `gender` IS NULL")
+
     print('^2[rsg-stables] Database ready.^7')
 end
 
@@ -147,6 +162,28 @@ local function toId(v)
     if not v or v < 1 or v ~= math.floor(v) then return nil end
     return v
 end
+
+local function randomGender()
+    return math.random(1, 2) == 1 and 'male' or 'female'
+end
+
+-- true while the horse is a parent in a breeding whose foal hasn't been collected
+local function isHorseBreeding(horseId)
+    if not (Config.Breeding.enabled and Config.Breeding.lockParents) then return false end
+    return MySQL.single.await('SELECT id FROM rsg_stables_breeding WHERE (parent_a = ? OR parent_b = ?) AND collected = 0', { horseId, horseId }) ~= nil
+end
+
+-- 'young' | 'adult' | 'old' from days owned (nil when aging is disabled)
+local function horseStage(ageDays)
+    local cfg = Config.HorseAging
+    if not (cfg and cfg.enabled) then return nil end
+    ageDays = tonumber(ageDays) or 0
+    if ageDays < (cfg.youngUntilDays or 7) then return 'young' end
+    if ageDays >= (cfg.oldFromDays or 60) then return 'old' end
+    return 'adult'
+end
+
+local AGE_SQL = 'DATEDIFF(NOW(), created_at) AS age_days'
 
 local function getBreedConfig(model)
     for _, b in ipairs(Config.Breeds) do
@@ -312,10 +349,11 @@ end)
 lib.callback.register('rsg-stables:server:getStableHorses', function(source, stableName)
     local Player = RSGCore.Functions.GetPlayer(source)
     if not Player or not getStableConfig(stableName) then return {} end
-    local rows = MySQL.query.await('SELECT * FROM rsg_stables_horses WHERE citizenid = ? AND stable = ? AND active = 0', {
+    local rows = MySQL.query.await('SELECT *, ' .. AGE_SQL .. ' FROM rsg_stables_horses WHERE citizenid = ? AND stable = ? AND active = 0', {
         Player.PlayerData.citizenid, stableName
-    })
-    return rows or {}
+    }) or {}
+    for _, r in ipairs(rows) do r.stage = horseStage(r.age_days) end
+    return rows
 end)
 
 -- Called on login: if the player left a horse out, keep it out and hand its data (incl. last
@@ -326,7 +364,7 @@ lib.callback.register('rsg-stables:server:restoreActiveHorse', function(source)
     local citizenid = Player.PlayerData.citizenid
 
     return withLock('citizen:' .. citizenid, function()
-        local row = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE citizenid = ? AND active = 1 LIMIT 1', { citizenid })
+        local row = MySQL.single.await('SELECT *, ' .. AGE_SQL .. ' FROM rsg_stables_horses WHERE citizenid = ? AND active = 1 LIMIT 1', { citizenid })
         if not row then
             endSession(citizenid)
             return nil
@@ -498,6 +536,25 @@ lib.callback.register('rsg-stables:server:naturalDrink', function(source)
     return true, { thirst = session.thirst }
 end)
 
+lib.callback.register('rsg-stables:server:naturalGraze', function(source)
+    local cfg = Config.HorseNaturalGraze
+    if not (cfg and cfg.enabled) then return false end
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player then return false end
+    local session = activeSessions[Player.PlayerData.citizenid]
+    if not session then return false end
+
+    local now = os.time() * 1000
+    if now - (session.lastNaturalGrazeAt or 0) < (cfg.cooldown or 120000) then return false end
+
+    applyDecay(session)
+    if session.hunger > (cfg.hungerThreshold or 40) then return false end
+
+    session.hunger = math.max(session.hunger, math.min(100, cfg.hungerRestore or 100))
+    session.lastNaturalGrazeAt = now
+    return true, { hunger = session.hunger }
+end)
+
 lib.callback.register('rsg-stables:server:brushHorse', function(source)
     local Player = RSGCore.Functions.GetPlayer(source)
     if not Player then return false, locale('player_not_found') end
@@ -525,7 +582,8 @@ lib.callback.register('rsg-stables:server:brushHorse', function(source)
     return true, { bonding = session.bonding }
 end)
 
-lib.callback.register('rsg-stables:server:buyHorse', function(source, stableName, model, horseName, outfit)
+lib.callback.register('rsg-stables:server:buyHorse', function(source, stableName, model, horseName, outfit, gender)
+    if gender ~= 'male' and gender ~= 'female' then gender = randomGender() end
     local Player = RSGCore.Functions.GetPlayer(source)
     if not Player then return false, locale('player_not_found') end
 
@@ -563,10 +621,10 @@ lib.callback.register('rsg-stables:server:buyHorse', function(source, stableName
             local ok, insertId = pcall(function()
                 return MySQL.insert.await([[
                     INSERT INTO rsg_stables_horses
-                        (citizenid, stable, model, breed_label, name, outfit, tack, health, stamina, speed, accel, handling, maxhealth, alive, insured, active)
-                    VALUES (?, ?, ?, ?, ?, ?, '{}', 100, 100, ?, ?, ?, ?, 1, 0, 0)
+                        (citizenid, stable, model, breed_label, gender, name, outfit, tack, health, stamina, speed, accel, handling, maxhealth, alive, insured, active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 100, 100, ?, ?, ?, ?, 1, 0, 0)
                 ]], {
-                    Player.PlayerData.citizenid, stableName, model, breed.label, safeName, safeOutfit,
+                    Player.PlayerData.citizenid, stableName, model, breed.label, gender, safeName, safeOutfit,
                     breed.speed, breed.acceleration, breedHandlingValue(breed), breed.health
                 })
             end)
@@ -591,13 +649,14 @@ lib.callback.register('rsg-stables:server:retrieveHorse', function(source, horse
     if not horseId then return false, locale('horse_not_found') end
 
     return withLock('citizen:' .. Player.PlayerData.citizenid, function()
-        local horse = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', {
+        local horse = MySQL.single.await('SELECT *, ' .. AGE_SQL .. ' FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', {
             horseId, Player.PlayerData.citizenid
         })
         if not horse then return false, locale('horse_not_found') end
         if isTrue(horse.active) then return false, locale('horse_already_out') end
         if not isTrue(horse.alive) then return false, locale('horse_dead_revive_first') end
         if not nearStableByName(source, horse.stable) then return false, locale('not_close_to_stable') end
+        if isHorseBreeding(horseId) then return false, locale('horse_is_breeding') end
 
         local existingActive = MySQL.single.await('SELECT id FROM rsg_stables_horses WHERE citizenid = ? AND active = 1', {
             Player.PlayerData.citizenid
@@ -739,6 +798,7 @@ lib.callback.register('rsg-stables:server:reviveHorse', function(source, horseId
         })
         if not horse then return false, locale('horse_not_found') end
         if isTrue(horse.alive) then return false, locale('horse_not_dead') end
+        if isTrue(horse.died_of_age) then return false, locale('horse_died_of_age_final') end
         if not nearStableByName(source, horse.stable) then return false, locale('not_close_to_stable') end
 
         if not chargePlayer(Player, Config.ReviveCost) then return false, locale('insufficient_funds') end
@@ -765,6 +825,7 @@ lib.callback.register('rsg-stables:server:transferHorse', function(source, horse
         if not horse then return false, locale('horse_not_found') end
         if isTrue(horse.active) then return false, locale('store_horse_first') end
         if horse.stable == newStable then return false, locale('already_stabled_there') end
+        if isHorseBreeding(horseId) then return false, locale('horse_is_breeding') end
         if not nearStableByName(source, horse.stable) then return false, locale('not_close_to_stable') end
 
         local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE citizenid = ? AND stable = ?', { Player.PlayerData.citizenid, newStable })
@@ -774,6 +835,126 @@ lib.callback.register('rsg-stables:server:transferHorse', function(source, horse
 
         MySQL.update.await('UPDATE rsg_stables_horses SET stable = ? WHERE id = ?', { newStable, horseId })
         return true
+      end)
+    end)
+end)
+
+-- ===================== GIVE HORSE TO ANOTHER PLAYER =====================
+local function charName(P)
+    local ci = P.PlayerData.charinfo or {}
+    return ((ci.firstname or '') .. ' ' .. (ci.lastname or '')):gsub('^%s+', ''):gsub('%s+$', '')
+end
+
+local function nearbyPlayers(src, maxDist)
+    local list = {}
+    local myPed = GetPlayerPed(src)
+    if not myPed or myPed == 0 then return list end
+    local myCoords = GetEntityCoords(myPed)
+    for _, id in ipairs(GetPlayers()) do
+        id = tonumber(id)
+        if id ~= src then
+            local ped = GetPlayerPed(id)
+            local P = RSGCore.Functions.GetPlayer(id)
+            if P and ped and ped ~= 0 and #(GetEntityCoords(ped) - myCoords) <= maxDist then
+                list[#list + 1] = { id = id, name = charName(P) }
+            end
+        end
+    end
+    return list
+end
+
+local pendingOffers = {}
+
+lib.callback.register('rsg-stables:server:getNearbyPlayers', function(source)
+    if not (Config.HorseGive and Config.HorseGive.enabled) then return {} end
+    return nearbyPlayers(source, Config.HorseGive.distance or 5.0)
+end)
+
+lib.callback.register('rsg-stables:server:giveHorse', function(source, horseId, targetId, price)
+    local cfg = Config.HorseGive
+    if not (cfg and cfg.enabled) then return false, locale('give_disabled') end
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player then return false, locale('player_not_found') end
+    horseId, targetId = toId(horseId), toId(targetId)
+    if not horseId then return false, locale('horse_not_found') end
+    if not targetId or targetId == source then return false, locale('give_target_invalid') end
+    local Target = RSGCore.Functions.GetPlayer(targetId)
+    if not Target then return false, locale('give_target_invalid') end
+
+    price = math.floor(tonumber(price) or 0)
+    if price < 0 or price > (cfg.maxPrice or 100000) then return false, locale('give_price_invalid', cfg.maxPrice or 100000) end
+    local function targetCanPay(T)
+        return price == 0 or (T.PlayerData.money[Config.PaymentAccount] or 0) >= price
+    end
+    if not targetCanPay(Target) then return false, locale('give_target_cant_afford', price) end
+
+    local function targetNearby()
+        for _, p in ipairs(nearbyPlayers(source, cfg.distance or 5.0)) do
+            if p.id == targetId then return true end
+        end
+        return false
+    end
+
+    -- pre-checks before bothering the other player
+    local horse = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', { horseId, Player.PlayerData.citizenid })
+    if not horse then return false, locale('horse_not_found') end
+    if not isTrue(horse.alive) then return false, locale('horse_is_dead') end
+    if isTrue(horse.active) then return false, locale('store_horse_first') end
+    if not nearStableByName(source, horse.stable) then return false, locale('not_close_to_stable') end
+    if not targetNearby() then return false, locale('give_target_too_far') end
+
+    -- ask the receiver (one offer at a time per receiver, so popups can't stack or be spammed)
+    if pendingOffers[targetId] then return false, locale('give_target_busy') end
+    pendingOffers[targetId] = true
+    local okAsk, accepted = pcall(lib.callback.await, 'rsg-stables:client:confirmHorseGift', targetId, charName(Player), horse.name, horse.breed_label, price)
+    pendingOffers[targetId] = nil
+    if not okAsk or accepted ~= true then return false, locale('give_declined') end
+
+    local giverCid, targetCid = Player.PlayerData.citizenid, Target.PlayerData.citizenid
+    -- lock both players in a fixed order so two simultaneous gifts can't deadlock
+    local first, second = giverCid, targetCid
+    if second < first then first, second = second, first end
+
+    return withLock('citizen:' .. first, function()
+      return withLock('citizen:' .. second, function()
+        -- re-check everything: state may have changed while the receiver was deciding
+        local h = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', { horseId, giverCid })
+        if not h then return false, locale('horse_not_found') end
+        if not isTrue(h.alive) then return false, locale('horse_is_dead') end
+        if isTrue(h.active) then return false, locale('store_horse_first') end
+        if isHorseBreeding(horseId) then return false, locale('horse_is_breeding') end
+        if not nearStableByName(source, h.stable) then return false, locale('not_close_to_stable') end
+        Target = RSGCore.Functions.GetPlayer(targetId)
+        if not Target or Target.PlayerData.citizenid ~= targetCid or not targetNearby() then return false, locale('give_target_too_far') end
+
+        if countOwnedHorses(targetCid) >= Config.MaxOwnedHorses then return false, locale('give_target_full') end
+        local atStable = MySQL.prepare.await('SELECT COUNT(*) FROM rsg_stables_horses WHERE citizenid = ? AND stable = ?', { targetCid, h.stable })
+        if atStable and atStable >= Config.MaxHorsesPerStable then return false, locale('give_target_stable_full') end
+
+        if not targetCanPay(Target) then
+            lib.notify(targetId, { description = locale('give_you_cant_afford', price), type = 'error' })
+            return false, locale('give_target_cant_afford', price)
+        end
+        if (cfg.fee or 0) > 0 and not chargePlayer(Player, cfg.fee) then return false, locale('insufficient_funds') end
+        if price > 0 and not chargePlayer(Target, price) then
+            if (cfg.fee or 0) > 0 then Player.Functions.AddMoney(Config.PaymentAccount, cfg.fee, 'rsg-stables-refund') end
+            return false, locale('give_target_cant_afford', price)
+        end
+
+        local changed = MySQL.update.await('UPDATE rsg_stables_horses SET citizenid = ?, bonding = 0 WHERE id = ? AND citizenid = ? AND active = 0', { targetCid, horseId, giverCid })
+        if not changed or changed == 0 then
+            if (cfg.fee or 0) > 0 then Player.Functions.AddMoney(Config.PaymentAccount, cfg.fee, 'rsg-stables-refund') end
+            if price > 0 then Target.Functions.AddMoney(Config.PaymentAccount, price, 'rsg-stables-refund') end
+            return false, locale('give_failed')
+        end
+
+        if price > 0 then
+            Player.Functions.AddMoney(Config.PaymentAccount, price, 'rsg-stables-horse-sale')
+            lib.notify(targetId, { description = locale('give_bought', h.name, charName(Player), price), type = 'success' })
+        else
+            lib.notify(targetId, { description = locale('give_received', h.name, charName(Player)), type = 'success' })
+        end
+        return true, price
       end)
     end)
 end)
@@ -807,6 +988,7 @@ lib.callback.register('rsg-stables:server:applyHorseTack', function(source, hors
             if sel ~= nil then
                 sel = math.floor(tonumber(sel) or 0)
                 if sel == 0 then
+                    if category.required then return false, locale('tack_required', category.label) end
                     if tack[category.key] then
                         changes[category.key] = false -- false = explicit removal, distinct from "untouched"
                     end
@@ -818,6 +1000,12 @@ lib.callback.register('rsg-stables:server:applyHorseTack', function(source, hors
                         changes[category.key] = sel
                     end
                 end
+            end
+        end
+
+        for _, category in ipairs(Config.TackCategories) do
+            if category.required and not (changes[category.key] or tack[category.key]) then
+                return false, locale('tack_required', category.label)
             end
         end
 
@@ -924,13 +1112,20 @@ lib.callback.register('rsg-stables:server:startBreeding', function(source, stabl
     if not isNearStable(source, stable) then return false, locale('not_close_to_stable') end
 
     return withLock('citizen:' .. Player.PlayerData.citizenid, function()
-        local horseA = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', { idA, Player.PlayerData.citizenid })
-        local horseB = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', { idB, Player.PlayerData.citizenid })
+        local horseA = MySQL.single.await('SELECT *, ' .. AGE_SQL .. ' FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', { idA, Player.PlayerData.citizenid })
+        local horseB = MySQL.single.await('SELECT *, ' .. AGE_SQL .. ' FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', { idB, Player.PlayerData.citizenid })
         if not horseA or not horseB then return false, locale('horse_not_found') end
+        local stA, stB = horseStage(horseA.age_days), horseStage(horseB.age_days)
+        if stA == 'young' or stB == 'young' then return false, locale('breed_too_young') end
+        if stA == 'old' or stB == 'old' then return false, locale('breed_too_old') end
         if not isTrue(horseA.alive) or not isTrue(horseB.alive) then return false, locale('breed_both_alive') end
         if isTrue(horseA.active) or isTrue(horseB.active) then return false, locale('breed_both_stabled') end
         if Config.Breeding.sameStableOnly ~= false and (horseA.stable ~= stableName or horseB.stable ~= stableName) then
             return false, locale('breed_both_stabled_here')
+        end
+
+        if Config.Breeding.requireOppositeGender ~= false and (not horseA.gender or horseA.gender == horseB.gender) then
+            return false, locale('breed_need_opposite_gender')
         end
 
         local pending = MySQL.single.await('SELECT id FROM rsg_stables_breeding WHERE (parent_a = ? OR parent_b = ? OR parent_a = ? OR parent_b = ?) AND collected = 0', {
@@ -938,9 +1133,17 @@ lib.callback.register('rsg-stables:server:startBreeding', function(source, stabl
         })
         if pending then return false, locale('breed_already_breeding') end
 
+        local now = os.time() * 1000
+        if (tonumber(horseA.breed_cooldown) or 0) > now or (tonumber(horseB.breed_cooldown) or 0) > now then
+            return false, locale('breed_parent_cooldown')
+        end
+
         if not chargePlayer(Player, Config.Breeding.cost) then return false, locale('insufficient_funds') end
 
-        local readyAt = os.time() * 1000 + Config.Breeding.time
+        local readyAt = now + Config.Breeding.time
+        if (Config.Breeding.parentCooldown or 0) > 0 then
+            MySQL.update.await('UPDATE rsg_stables_horses SET breed_cooldown = ? WHERE id IN (?, ?)', { now + Config.Breeding.parentCooldown, idA, idB })
+        end
         MySQL.insert.await([[
             INSERT INTO rsg_stables_breeding (citizenid, stable, parent_a, parent_b, ready_at, collected)
             VALUES (?, ?, ?, ?, ?, 0)
@@ -955,8 +1158,14 @@ lib.callback.register('rsg-stables:server:getBreedingJobs', function(source, sta
     if not Player or not getStableConfig(stableName) then return {} end
     local rows = MySQL.query.await('SELECT * FROM rsg_stables_breeding WHERE citizenid = ? AND stable = ? AND collected = 0', {
         Player.PlayerData.citizenid, stableName
-    })
-    return rows or {}
+    }) or {}
+    -- send remaining time from the SERVER clock (client clocks can't be trusted / differ)
+    local now = os.time() * 1000
+    for _, r in ipairs(rows) do
+        r.ms_left = math.max(0, (tonumber(r.ready_at) or 0) - now)
+        r.ready = r.ms_left == 0
+    end
+    return rows
 end)
 
 lib.callback.register('rsg-stables:server:collectFoal', function(source, breedingId)
@@ -985,27 +1194,40 @@ lib.callback.register('rsg-stables:server:collectFoal', function(source, breedin
         local parentB = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ?', { job.parent_b })
         if not parentA or not parentB then return false, locale('parent_data_missing') end
 
-        -- inherit stats: average of parents with slight random variance
-        local function inherit(a, b)
-            local base = math.floor((a + b) / 2)
-            local variance = math.random(-5, 5)
-            return math.max(10, math.min(100, base + variance))
+        -- inherit stats on the breed's 1..BreedStatMax scale (handling uses its own 0..100 scale)
+        local cfgB = Config.Breeding
+        local function inherit(a, b, lo, hi, variance)
+            a, b = tonumber(a) or lo, tonumber(b) or lo
+            local value
+            if math.random(1, 100) <= (cfgB.betterParentChance or 0) then
+                value = math.max(a, b)
+            else
+                value = math.floor((a + b) / 2 + 0.5)
+            end
+            value = value + math.random(-variance, variance)
+            return math.max(lo, math.min(hi, value))
         end
+        local statMax = Config.BreedStatMax or 10
+        local v = cfgB.statVariance or 1
 
         -- foal takes the model/breed of a random parent
         local foalParent = math.random(1, 2) == 1 and parentA or parentB
 
+        -- claim the job first so a double-click / second request can't create two foals
+        local claimed = MySQL.update.await('UPDATE rsg_stables_breeding SET collected = 1 WHERE id = ? AND collected = 0', { breedingId })
+        if not claimed or claimed == 0 then return false, locale('breed_job_not_found') end
+
         local ok, insertId = pcall(function()
             return MySQL.insert.await([[
                 INSERT INTO rsg_stables_horses
-                    (citizenid, stable, model, breed_label, name, outfit, tack, health, stamina, speed, accel, handling, maxhealth, alive, insured, active)
-                VALUES (?, ?, ?, ?, ?, ?, '{}', 100, 100, ?, ?, ?, ?, 1, 0, 0)
+                    (citizenid, stable, model, breed_label, gender, name, outfit, tack, health, stamina, speed, accel, handling, maxhealth, alive, insured, active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 100, 100, ?, ?, ?, ?, 1, 0, 0)
             ]], {
-                Player.PlayerData.citizenid, job.stable, foalParent.model, foalParent.breed_label, locale('unnamed_foal'), foalParent.outfit or 0,
-                inherit(parentA.speed, parentB.speed),
-                inherit(parentA.accel, parentB.accel),
-                inherit(parentA.handling, parentB.handling),
-                inherit(parentA.maxhealth, parentB.maxhealth)
+                Player.PlayerData.citizenid, job.stable, foalParent.model, foalParent.breed_label, randomGender(), locale('unnamed_foal'), foalParent.outfit or 0,
+                inherit(parentA.speed, parentB.speed, 1, statMax, v),
+                inherit(parentA.accel, parentB.accel, 1, statMax, v),
+                inherit(parentA.handling, parentB.handling, 0, 100, v * 5),
+                inherit(parentA.maxhealth, parentB.maxhealth, 1, statMax, v)
             })
         end)
 
@@ -1013,10 +1235,9 @@ lib.callback.register('rsg-stables:server:collectFoal', function(source, breedin
             print(('[rsg-stables] ERROR: collectFoal insert failed for citizenid %s: %s'):format(
                 Player.PlayerData.citizenid, tostring(insertId)
             ))
+            MySQL.update.await('UPDATE rsg_stables_breeding SET collected = 0 WHERE id = ?', { breedingId }) -- give the job back
             return false, locale('foal_collect_error')
         end
-
-        MySQL.update.await('UPDATE rsg_stables_breeding SET collected = 1 WHERE id = ?', { breedingId })
 
         return true
     end)
@@ -1050,4 +1271,28 @@ RegisterNetEvent('rsg-stables:server:openHorseInventory', function(horseId, hors
         maxweight = Config.HorseInventory.maxweight,
         slots = Config.HorseInventory.slots,
     })
+end)
+
+
+-- ===================== NATURAL DEATH (old age) =====================
+CreateThread(function()
+    while true do
+        local cfg = Config.HorseAging
+        Wait((cfg and cfg.checkInterval) or 600000)
+        if cfg and cfg.enabled and (cfg.lifespanDays or 0) > 0 then
+            local rows = MySQL.query.await('SELECT id, citizenid, name, active FROM rsg_stables_horses WHERE alive = 1 AND DATEDIFF(NOW(), created_at) >= ?', { cfg.lifespanDays }) or {}
+            for _, r in ipairs(rows) do
+                withLock('citizen:' .. r.citizenid, function()
+                    MySQL.update.await('UPDATE rsg_stables_horses SET alive = 0, died_of_age = 1, insured = 0, active = 0, pos_x = NULL, pos_y = NULL, pos_z = NULL, pos_h = NULL WHERE id = ? AND alive = 1', { r.id })
+                    -- cancel any breeding this horse was part of
+                    MySQL.update.await('UPDATE rsg_stables_breeding SET collected = 1 WHERE (parent_a = ? OR parent_b = ?) AND collected = 0 AND ready_at > ?', { r.id, r.id, os.time() * 1000 })
+                    if isTrue(r.active) then endSession(r.citizenid) end
+                    local Player = RSGCore.Functions.GetPlayerByCitizenId(r.citizenid)
+                    if Player then
+                        TriggerClientEvent('rsg-stables:client:horseDiedOfAge', Player.PlayerData.source, r.id, r.name)
+                    end
+                end)
+            end
+        end
+    end
 end)

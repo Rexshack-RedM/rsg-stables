@@ -99,7 +99,7 @@
   }
 
   const ICONS = {
-    dollar: '$', heart: '♥', foal: 'F', horse: 'H', pen: '✎',
+    dollar: '$', mars: '♂', venus: '♀', heart: '♥', foal: 'F', horse: 'H', pen: '✎',
     shield: 'S', route: '⇄', medkit: '+', retrieve: '↑', shirt: '↻',
     xmark: '✕', filter: '⧩', brush: '✐',
   };

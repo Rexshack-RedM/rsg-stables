@@ -2,7 +2,7 @@
 
 Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customise, care for and breed horses across multiple stable locations, all through a custom NUI.
 
-**Version:** 3.0.0
+**Version:** 3.1.0
 
 ---
 
@@ -11,20 +11,24 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 - **Multiple stables** – Valentine, Blackwater, Rhodes, Saint Denis and Strawberry out of the box, each with a stablehand NPC, map blip and horse preview spot. Add your own in config.
 - **Buy menu** – 100+ horse breeds/coats with health, stamina, speed and acceleration ratings, class, handling, descriptions and price-band filters.
 - **Ownership limits** – max horses per player, and max horses each player can keep at one stable.
+- **Stallions & mares** – choose the gender when buying; foals get a random one.
 - **Rename & insure** – rename horses for a fee; insure them so a dead horse can be revived/replaced.
-- **Tack customisation** – blankets, saddles, saddlebags, horns, stirrups, bedrolls, manes, tails, masks, mustaches, holsters, bridles, each item individually priced.
+- **Give or sell to a player** – hand a stabled horse to someone standing next to you, free or for an asking price they must accept (and be able to afford).
+- **Tack customisation** – blankets, saddles, saddlebags, horns, stirrups, bedrolls, manes, tails, masks, mustaches, holsters, bridles, each item individually priced. Categories can be marked `required` (the holster is by default, as it's needed to carry weapons).
 - **Coat customisation** – custom tint system (main coat, markings, nose, mane, tail) with quick-pick presets and a flat colour-change fee.
 - **Horse needs** – hunger and thirst decay over time; starving/dehydrated horses lose health, well-fed horses slowly regenerate.
 - **Feeding, watering & brushing** – via ox_target on your active horse, or by using the feed items / brush straight from the inventory (with the hand-feed and brushing animations).
-- **Saddlebags** – each horse has its own rsg-inventory stash (weight and slots set in config), opened from the horse's target menu.
+- **Saddlebags** – each horse has its own rsg-inventory stash (weight and slots set in config), opened from the horse's target menu or the game's own **Horse Cargo (B)** prompt.
 - **Native prompts tidy-up** – the game's own Brush / Feed horse prompts can be hidden so only the ox_target options are used.
 - **Natural drinking** – horses drink on their own at rivers, lakes and water troughs when thirsty.
+- **Natural grazing** – a hungry horse wanders to hay near you (configurable hay props) and eats.
+- **Aging & lifespan** – horses are Young, Adult or Old by real-life days owned. Old horses hold less stamina each day and eventually die of natural causes (no revive).
 - **Bonding** – grows when you feed, water and brush your horse.
 - **Horse stimulant** – usable item giving a timed stamina fortify and optional speed boost.
 - **Whistle recall** – whistle (H) to call your horse; it walks up and stops just in front of you, facing you. Teleports closer first if it's too far away, and respawns it if the game has removed it.
 - **Persistent active horse** – position is saved to the database while out, so it survives logouts and resource restarts.
 - **Flee horse** – send your horse away; optionally return it to the stable automatically.
-- **Breeding** – breed two horses (optionally at the same stable) to produce a foal after a timer.
+- **Breeding** – breed a stallion and a mare (adults only) to produce a foal after one real-life day. Foals inherit the parents' averaged stats with a chance to take the better parent's. Parents are locked while breeding and rest afterwards.
 - **Horse info card** – native animal info card showing horse stats.
 - **Store command** – `/storehorse` to put your active horse away near a stable.
 - **Localisation** – en, de, el, es, fr, ja, nl, pl, pt-br, ro.
@@ -41,6 +45,8 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 - [oxmysql](https://github.com/Rexshack-RedM/oxmysql)
 - [rsg-inventory](https://github.com/Rexshack-RedM/rsg-inventory) (saddlebag stashes)
 
+> **Upgrading from 3.0.x:** new columns (`gender`, `breed_cooldown`, `died_of_age`) are added automatically on start and existing horses are given a random gender. Aging counts from each horse's original purchase date, so long-owned horses will be Old (or reach their lifespan) straight away – raise `Config.HorseAging.lifespanDays` first if you don't want that.
+
 ---
 
 ## Installation
@@ -49,7 +55,7 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 2. **Database** – the tables `rsg_stables_horses` and `rsg_stables_breeding` are created automatically on first start. If you prefer manual setup, import `installation/install.sql` with HeidiSQL/phpMyAdmin.
 3. **Items** – make sure the following items exist in `rsg-core/shared/items.lua` (names are configurable):
    - `horse_apple`, `horse_carrot` – feed items (**set `useable = true`**)
-   - `waterbucket` – water item
+   - `fullbucket` – water item
    - `horse_brush` – brushing tool, not consumed (**set `useable = true`**)
    - `horse_stimulant` – stimulant (**set `useable = true`**)
 4. Ensure the resource in your `server.cfg` **after** its dependencies:
@@ -95,12 +101,15 @@ All settings live in `shared/config.lua`.
 | `Config.HorseStimulant` | Item, duration, stamina floor, fortify amount, speed multiplier, reuse |
 | `Config.HorseNeeds` | Hunger/thirst decay rates, critical threshold, health drain and regen |
 | `Config.HorseNaturalDrink` | Thirst threshold, timings, water/trough radius and trough models |
+| `Config.HorseNaturalGraze` | Hunger threshold, search radius around the player, eat time, cooldown, animation and hay prop models |
 | `Config.HorseBrushItem` | Item required to brush (also usable from the inventory) |
-| `Config.HorseInventory` | Saddlebag stash on/off, max weight, slots and target distance |
+| `Config.HorseInventory` | Saddlebag stash on/off, max weight, slots, target distance and `nativeCargoPrompt` (B opens the stash) |
 | `Config.HorseBonding` | Bonding gained per feed / water / brush |
 | `Config.HorseFlee` | Flee delay, whether fled horses are stored, respawn distance |
-| `Config.Breeding` | Cost, foal timer, same-stable requirement |
-| `Config.Tack` / `Config.TackCategories` / `Config.TackItems` | Enable tack, categories and individual tack items with prices |
+| `Config.Breeding` | Cost, foal timer, same-stable, stallion + mare requirement, parent lock and cooldown, stat variance, better-parent chance |
+| `Config.HorseAging` | Young/Old thresholds, lifespan, "days left" warning, minimum stamina for the oldest horses |
+| `Config.HorseGive` | Give/sell to player on/off, distance, giver fee, accept timeout, max asking price |
+| `Config.Tack` / `Config.TackCategories` / `Config.TackItems` | Enable tack, categories (add `required = true` to force one) and individual tack items with prices |
 | `Config.Coat` | Enable coat editor, colour-change fee and presets |
 | `Config.BuyPriceBands` | Price filters in the buy menu |
 | `Config.BreedStatMax` | Max value of breed stat bars |
@@ -148,7 +157,10 @@ Walk up to the stablehand and use **ox_target → Manage Stable** to open the me
 - **Take out / store** your horses.
 - **Rename**, **insure** or **revive** horses.
 - **Customise tack** and **coat**.
-- **Breed** two horses and collect the foal when ready.
+- **Breed** a stallion and a mare and collect the foal when ready.
+- **Give to Player** – give or sell a horse to someone standing next to you.
+
+Each horse in the list shows its gender, stage (Young / Adult / Old, with days left near the end of its life) and health/stamina.
 
 ### With your active horse
 Target your horse (ox_target) for:
@@ -165,6 +177,7 @@ Target your horse (ox_target) for:
 |---|---|
 | Whistle key (`INPUT_WHISTLE`, default **H**) | Call your active horse |
 | Focus horse + prompt | Show horse info card |
+| Horse Cargo (**B**) next to your horse | Open its saddlebags |
 | `/storehorse` | Store your active horse (must be near a stable) |
 
 ### Items
@@ -173,7 +186,7 @@ Target your horse (ox_target) for:
 | `horse_stimulant` | Use from inventory while mounted or near your horse for a stamina/speed boost |
 | `horse_apple`, `horse_carrot` | Use from inventory next to your horse (dismounted), or via **Feed Horse** |
 | `horse_brush` | Use from inventory next to your horse (dismounted), or via **Brush Horse** |
-| `waterbucket` | Used through **Water Horse** |
+| `fullbucket` | Used through **Water Horse** |
 
 ---
 
