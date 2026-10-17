@@ -271,5 +271,9 @@
     "ui_coat_presets": "Presets",
     "ui_coat_apply": "Apply — $%s",
     "ui_coat_reset": "Restore Natural",
-    "ui_coat_no_change": "No changes"
+    "ui_coat_no_change": "No changes",
+    "release_horse": "Pferd freigeben",
+    "release_horse_desc": "Entfernt dieses verstorbene Pferd endgültig aus deinem Stall und gibt einen Pferdeplatz frei.",
+    "horse_released": "%s wurde zur Ruhe gebettet.",
+    "release_failed": "Das Pferd konnte nicht freigegeben werden."
 }

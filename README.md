@@ -2,8 +2,6 @@
 
 Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customise, care for and breed horses across multiple stable locations, all through a custom NUI.
 
-**Version:** 3.1.0
-
 ---
 
 ## Features
@@ -13,8 +11,9 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 - **Ownership limits** – max horses per player, and max horses each player can keep at one stable.
 - **Stallions & mares** – choose the gender when buying; foals get a random one.
 - **Rename & insure** – rename horses for a fee; insure them so a dead horse can be revived/replaced.
+- **Release dead horses** – lay a deceased horse to rest from the stable menu to free up its slot (the only option for horses that died of old age).
 - **Give or sell to a player** – hand a stabled horse to someone standing next to you, free or for an asking price they must accept (and be able to afford).
-- **Tack customisation** – blankets, saddles, saddlebags, horns, stirrups, bedrolls, manes, tails, masks, mustaches, holsters, bridles, each item individually priced. Categories can be marked `required` (the holster is by default, as it's needed to carry weapons).
+- **Tack customisation** – blankets, saddles, saddlebags, horns, stirrups, bedrolls, manes, tails, masks, mustaches, holsters, bridles, each item individually priced. Styles swap on the preview horse instantly (no respawn) with a menu sound while cycling. Categories can be marked `required` (the holster is by default, as it's needed to carry weapons).
 - **Coat customisation** – custom tint system (main coat, markings, nose, mane, tail) with quick-pick presets and a flat colour-change fee.
 - **Horse needs** – hunger and thirst decay over time; starving/dehydrated horses lose health, well-fed horses slowly regenerate.
 - **Feeding, watering & brushing** – via ox_target on your active horse, or by using the feed items / brush straight from the inventory (with the hand-feed and brushing animations).
@@ -64,6 +63,7 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
    ensure oxmysql
    ensure rsg-core
    ensure ox_target
+   ensure rsg-inventory
    ensure rsg-stables
    ```
 5. Restart the server.
@@ -78,7 +78,6 @@ All settings live in `shared/config.lua`.
 
 | Option | Default | Description |
 |---|---|---|
-| `Config.Locale` | `'en'` | Language file from `locales/` |
 | `Config.MaxOwnedHorses` | `8` | Max horses one player can own |
 | `Config.MaxHorsesPerStable` | `20` | Max horses one player can keep at one stable |
 | `Config.RenameCost` | `15` | Cost to rename a horse |
@@ -109,6 +108,7 @@ All settings live in `shared/config.lua`.
 | `Config.Breeding` | Cost, foal timer, same-stable, stallion + mare requirement, parent lock and cooldown, stat variance, better-parent chance |
 | `Config.HorseAging` | Young/Old thresholds, lifespan, "days left" warning, minimum stamina for the oldest horses |
 | `Config.HorseGive` | Give/sell to player on/off, distance, giver fee, accept timeout, max asking price |
+| `Config.TackSounds` | Frontend sound played while cycling tack styles (`enabled`, `soundset`, `left`, `right`) |
 | `Config.Tack` / `Config.TackCategories` / `Config.TackItems` | Enable tack, categories (add `required = true` to force one) and individual tack items with prices |
 | `Config.Coat` | Enable coat editor, colour-change fee and presets |
 | `Config.BuyPriceBands` | Price filters in the buy menu |
@@ -145,7 +145,11 @@ All settings live in `shared/config.lua`.
 
 ### Translations
 
-Edit or add a JSON file in `locales/` and set `Config.Locale` to its name.
+Edit or add a JSON file in `locales/`. The language is chosen by ox_lib, set it in your `server.cfg`:
+
+```cfg
+setr ox:locale "en"
+```
 
 ---
 
@@ -155,7 +159,7 @@ Edit or add a JSON file in `locales/` and set `Config.Locale` to its name.
 Walk up to the stablehand and use **ox_target → Manage Stable** to open the menu, where you can:
 - **Buy** a horse (filter by class, breed and price).
 - **Take out / store** your horses.
-- **Rename**, **insure** or **revive** horses.
+- **Rename**, **insure**, **revive** or **release** (dead) horses.
 - **Customise tack** and **coat**.
 - **Breed** a stallion and a mare and collect the foal when ready.
 - **Give to Player** – give or sell a horse to someone standing next to you.

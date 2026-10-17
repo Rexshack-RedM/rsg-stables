@@ -271,5 +271,9 @@
     "ui_coat_presets": "Presets",
     "ui_coat_apply": "Apply — $%s",
     "ui_coat_reset": "Restore Natural",
-    "ui_coat_no_change": "No changes"
+    "ui_coat_no_change": "No changes",
+    "release_horse": "Zwolnij konia",
+    "release_horse_desc": "Usuń na stałe tego martwego konia ze stajni i zwolnij miejsce.",
+    "horse_released": "%s spoczywa w pokoju.",
+    "release_failed": "Nie udało się zwolnić konia."
 }

@@ -271,5 +271,9 @@
     "ui_coat_presets": "Presets",
     "ui_coat_apply": "Apply — $%s",
     "ui_coat_reset": "Restore Natural",
-    "ui_coat_no_change": "No changes"
+    "ui_coat_no_change": "No changes",
+    "release_horse": "Libérer le cheval",
+    "release_horse_desc": "Retire définitivement ce cheval décédé de ton écurie et libère une place.",
+    "horse_released": "%s repose désormais en paix.",
+    "release_failed": "Impossible de libérer le cheval."
 }

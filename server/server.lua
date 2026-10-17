@@ -120,8 +120,11 @@ local function getStableConfig(stableName)
     return nil
 end
 
+-- breed handling class -> stored 0..100 handling value (unknown classes fall back to 50)
 local HandlingMap = {
+    Heavy = 35,
     Standard = 50,
+    Race = 65,
     Elite = 80,
 }
 
@@ -239,7 +242,8 @@ end
 
 local function sanitizeName(name)
     if type(name) ~= 'string' then return nil end
-    name = name:gsub('[%c]', ''):gsub('%s+', ' '):gsub('^%s+', ''):gsub('%s+$', '')
+    -- strip control chars and markup characters (names are shown in markdown/NUI dialogs to other players)
+    name = name:gsub('[%c<>%[%]%*_`#|\\]', ''):gsub('%s+', ' '):gsub('^%s+', ''):gsub('%s+$', '')
     if name == '' then return nil end
     return name
 end
@@ -804,6 +808,27 @@ lib.callback.register('rsg-stables:server:reviveHorse', function(source, horseId
         if not chargePlayer(Player, Config.ReviveCost) then return false, locale('insufficient_funds') end
 
         MySQL.update.await('UPDATE rsg_stables_horses SET alive = 1, health = 100, stamina = 100, hunger = 100, thirst = 100, insured = 0 WHERE id = ?', { horseId })
+        return true
+    end)
+end)
+
+-- Remove a dead horse for good (frees the owned-horse slot; horses that died of old age can never be revived)
+lib.callback.register('rsg-stables:server:releaseHorse', function(source, horseId)
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player then return false, locale('player_not_found') end
+    horseId = toId(horseId)
+    if not horseId then return false, locale('horse_not_found') end
+
+    return withLock('citizen:' .. Player.PlayerData.citizenid, function()
+        local horse = MySQL.single.await('SELECT id, stable, alive FROM rsg_stables_horses WHERE id = ? AND citizenid = ?', {
+            horseId, Player.PlayerData.citizenid
+        })
+        if not horse then return false, locale('horse_not_found') end
+        if isTrue(horse.alive) then return false, locale('horse_not_dead') end
+        if not nearStableByName(source, horse.stable) then return false, locale('not_close_to_stable') end
+
+        local deleted = MySQL.update.await('DELETE FROM rsg_stables_horses WHERE id = ? AND citizenid = ? AND alive = 0', { horseId, Player.PlayerData.citizenid })
+        if not deleted or deleted == 0 then return false, locale('release_failed') end
         return true
     end)
 end)

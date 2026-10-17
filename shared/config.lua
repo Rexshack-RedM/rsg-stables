@@ -1,7 +1,5 @@
 Config = {}
 
-Config.Locale = 'en'
-
 -- ===================== GENERAL =====================
 Config.MaxOwnedHorses      = 8      -- max horses a single player can own across all stables
 Config.MaxHorsesPerStable  = 20     -- max horses a single player can keep at one stable location
@@ -152,8 +150,8 @@ Config.HorseAging = {
     youngUntilDays = 7,      -- 0..6 days owned = Young (can't breed)
     oldFromDays    = 60,     -- 60+ days owned  = Old (can't breed)
     lifespanDays   = 90,     -- at this age the horse dies of natural causes (can't be revived or insured back)
-    warnDays       = 7,
-    oldMinStamina  = 40,     -- stamina core cap (%) an old horse falls to by the end of its life; starts at 100 on the first 'old' day and drops each day      -- show "X days left" on old horses within this many days of their lifespan
+    warnDays       = 7,      -- show "X days left" on old horses within this many days of their lifespan
+    oldMinStamina  = 40,     -- stamina core cap (%) an old horse falls to by the end of its life; starts at 100 on the first 'old' day and drops each day
     checkInterval  = 10 * 60 * 1000, -- ms between server checks for horses that have reached their lifespan
 }
 
@@ -1614,6 +1612,14 @@ Config.Coat = {
         { label = 'Pink',         tint0 = 107 },
         { label = 'Lilac',        tint0 = 108 },
     },
+}
+
+-- frontend sound played when cycling tack styles in the customisation menu
+Config.TackSounds = {
+    enabled  = true,
+    soundset = 'PAUSE_MENU_SOUNDSET',
+    left     = 'NAV_LEFT',
+    right    = 'NAV_RIGHT',
 }
 
 Config.TackCategories = {

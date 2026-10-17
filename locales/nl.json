@@ -271,5 +271,9 @@
     "ui_coat_presets": "Presets",
     "ui_coat_apply": "Apply — $%s",
     "ui_coat_reset": "Restore Natural",
-    "ui_coat_no_change": "No changes"
+    "ui_coat_no_change": "No changes",
+    "release_horse": "Paard vrijgeven",
+    "release_horse_desc": "Verwijder dit overleden paard definitief uit je stal en maak een plek vrij.",
+    "horse_released": "%s is te ruste gelegd.",
+    "release_failed": "Het paard kon niet worden vrijgegeven."
 }

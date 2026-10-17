@@ -183,6 +183,7 @@ local function whistleActiveHorse()
     local horseCoords = GetEntityCoords(entity)
     local distance = #(playerCoords - horseCoords)
 
+    -- too far away: move it close to the player first, then it walks the last few metres
     if distance > Config.WhistleTeleportDistance then
         local heading = GetEntityHeading(playerPed)
         local rad = math.rad(-heading)
@@ -190,10 +191,8 @@ local function whistleActiveHorse()
         local y = playerCoords.y + 5.0 * math.cos(rad)
         SetEntityCoords(entity, x, y, playerCoords.z, false, false, false, true)
         SetEntityHeading(entity, heading + 180.0)
-        sendHorseToPlayer(entity, playerPed)
-    else
-        sendHorseToPlayer(entity, playerPed)
     end
+    sendHorseToPlayer(entity, playerPed)
 end
 
 local function whistlePressed()
@@ -770,8 +769,9 @@ local function fleeActiveHorse()
         if DoesEntityExist(horsePed) then
             local healthPct = healthPctOf(horsePed)
 
-            if Config.HorseFlee.storeOnFlee then
-                lib.callback.await('rsg-stables:server:fleeStoreHorse', false, horse.dbId, healthPct, staminaPctOf(horsePed, 100))
+            local stored = Config.HorseFlee.storeOnFlee
+                and lib.callback.await('rsg-stables:server:fleeStoreHorse', false, horse.dbId, healthPct, staminaPctOf(horsePed, 100))
+            if stored then
                 pendingHorse = nil
             elseif snapshot then
                 local fc = GetEntityCoords(horsePed)
@@ -1356,6 +1356,8 @@ function OpenStableMenu(stable)
     local aliveCount = 0
     for _, horse in ipairs(horses) do
         horse.alive = horse.alive == true or horse.alive == 1
+        horse.insured = horse.insured == true or horse.insured == 1
+        horse.died_of_age = horse.died_of_age == true or horse.died_of_age == 1
         if horse.alive then aliveCount = aliveCount + 1 end
     end
     if aliveCount >= 2 and Config.Breeding.enabled then
@@ -1404,7 +1406,7 @@ function OpenStableMenu(stable)
             end
             badge = nil
         else
-            desc = (horse.died_of_age == true or horse.died_of_age == 1) and locale('died_of_old_age') or locale('deceased')
+            desc = horse.died_of_age and locale('died_of_old_age') or locale('deceased')
             badge = locale('deceased')
         end
         table.insert(options, {
@@ -1798,9 +1800,57 @@ local function buildPreviewTack(baseTack, selections)
     return preview
 end
 
+-- metaped category hashes for each tack slot (used to strip a slot in place)
+local TackCategoryHashes = {
+    saddle = 0xBAA7E618, blanket = 0x17CEB41A, saddlebags = 0x80451C25, horn = 0x05447332,
+    stirrups = 0xDA6DADCA, bedroll = 0xEFB31921, tail = 0xA63CAE10, mane = 0xAA0217AB,
+    mask = 0xD3500E5D, mustache = 0x30DEFDDF, holster = 0xAC106B30, bridle = 0x94B2E3AF,
+    horseshoe = 0xFACFC3C0,
+}
+-- slots that fall back to the horse's natural look when emptied; stripping them leaves the horse bald,
+-- so clearing one of these re-applies the base outfit instead
+local NaturalSlots = { mane = true, tail = true }
+
+local lastPreviewPed, lastPreviewTack = nil, {}
+
+-- swaps only the changed tack slots on the existing preview horse (no despawn / respawn)
 local function refreshTackPreview(stable, horse, baseTack, selections)
     if not (previewPed and DoesEntityExist(previewPed)) then return end
-    spawnPreviewPed(horse.model, stable.previewCoords, horse.outfit, buildPreviewTack(baseTack, selections), horse.coat)
+    local target = buildPreviewTack(baseTack, selections)
+
+    if lastPreviewPed ~= previewPed then
+        -- first change on this preview horse: it was spawned with baseTack
+        lastPreviewPed = previewPed
+        lastPreviewTack = {}
+        for k, v in pairs(baseTack) do lastPreviewTack[k] = v end
+    end
+
+    local changed = false
+    for _, category in ipairs(Config.TackCategories) do
+        local key = category.key
+        local want, have = target[key], lastPreviewTack[key]
+        if tostring(want) ~= tostring(have) then
+            if not want and NaturalSlots[key] then
+                -- restore natural mane/tail from the base outfit, then re-apply everything else on top
+                initAndApplyOutfit(previewPed, horse.outfit or 0)
+                applyTackTable(previewPed, target)
+                if horse.coat then HorseCoat.Apply(previewPed, horse.coat) end
+                lastPreviewTack = target
+                return
+            end
+            local catHash = TackCategoryHashes[key]
+            if catHash then
+                Citizen.InvokeNative(0xD710A5007C2AC539, previewPed, catHash, 0) -- REMOVE_TAG_FROM_META_PED
+            end
+            if want then applyTackItem(previewPed, want) end
+            changed = true
+        end
+    end
+
+    if changed then
+        Citizen.InvokeNative(0xCC8CA3E88256E58F, previewPed, false, true, true, true, false) -- UPDATE_PED_VARIATION
+    end
+    lastPreviewTack = target
 end
 
 local function currentPick(baseTack, selections, key)
@@ -1955,6 +2005,10 @@ function showTackWizardStep(stable, horse, baseTack, selections, index)
             else
                 styleIndex = styleIndex + 1
                 if styleIndex > styleCount then styleIndex = 1 end
+            end
+            local snd = Config.TackSounds
+            if snd and snd.enabled then
+                Citizen.InvokeNative(0x67C540AA08E4A6F5, dir == 'left' and snd.left or snd.right, snd.soundset, true, 0) -- PLAY_SOUND_FRONTEND
             end
             applyCurrentStyle()
             sendStyleScreen()
@@ -2232,16 +2286,33 @@ function OpenHorseMenu(stable, horse)
             })
         end
     else
+        if not horse.died_of_age then
+            table.insert(options, {
+                title = locale('revive'),
+                description = locale('revive_desc', Config.ReviveCost),
+                icon = 'medkit',
+                onSelect = function()
+                    local ok, err = lib.callback.await('rsg-stables:server:reviveHorse', false, horse.id)
+                    if ok then
+                        NuiNotify(locale('revived_success'), 'success')
+                    else
+                        NuiNotify(err or locale('revive_failed'), 'error')
+                    end
+                    OpenStableMenu(stable)
+                end,
+            })
+        end
+
         table.insert(options, {
-            title = locale('revive'),
-            description = locale('revive_desc', Config.ReviveCost),
-            icon = 'medkit',
+            title = locale('release_horse'),
+            description = locale('release_horse_desc'),
+            icon = 'xmark',
             onSelect = function()
-                local ok, err = lib.callback.await('rsg-stables:server:reviveHorse', false, horse.id)
+                local ok, err = lib.callback.await('rsg-stables:server:releaseHorse', false, horse.id)
                 if ok then
-                    NuiNotify(locale('revived_success'), 'success')
+                    NuiNotify(locale('horse_released', horse.name), 'success')
                 else
-                    NuiNotify(err or locale('revive_failed'), 'error')
+                    NuiNotify(err or locale('release_failed'), 'error')
                 end
                 OpenStableMenu(stable)
             end,
@@ -2367,10 +2438,10 @@ CreateThread(function()
             local horse = activeHorse.entity
             local mounted = IsPedOnMount(cache.ped) and GetMount(cache.ped) == horse
             local canDrink = (cfg.allowMounted or not mounted) and GetEntitySpeed(horse) < 0.3
-            local source, trough = nil, nil
-            if canDrink then source, trough = isHorseNearNaturalWater(horse, cfg) end
+            local waterKind, trough = nil, nil
+            if canDrink then waterKind, trough = isHorseNearNaturalWater(horse, cfg) end
 
-            if source then
+            if waterKind then
                 stillSince = stillSince or GetGameTimer()
                 if GetGameTimer() - stillSince >= (cfg.stillTime or 3000) then
                     stillSince = nil
@@ -2383,11 +2454,11 @@ CreateThread(function()
                             TaskTurnPedToFaceEntity(horse, trough, 1500)
                             Wait(1500)
                         end
-                        playHorseDrinkAnim(horse, source, cfg.drinkDuration or 8000)
+                        playHorseDrinkAnim(horse, waterKind, cfg.drinkDuration or 8000)
                         if activeHorse and activeHorse.entity == horse and result and result.thirst then
                             activeHorse.thirst = result.thirst
                         end
-                        lib.notify({ description = locale(source == 'trough' and 'horse_drank_trough' or 'horse_drank_river'), type = 'success' })
+                        lib.notify({ description = locale(waterKind == 'trough' and 'horse_drank_trough' or 'horse_drank_river'), type = 'success' })
                     end
                     naturalDrinking = false
                 end
@@ -2529,6 +2600,10 @@ end)
 RegisterNetEvent('rsg-stables:client:horseDiedOfAge', function(horseId, horseName)
     if activeHorse and activeHorse.dbId == horseId then
         despawnActiveHorseEntity()
+    end
+    -- a horse that is out but not spawned (fled / after relog) must not be whistled back
+    if pendingHorse and pendingHorse.id == horseId then
+        pendingHorse = nil
     end
     lib.notify({ description = locale('horse_died_of_age', horseName or locale('your_horse')), type = 'error', duration = 10000 })
 end)

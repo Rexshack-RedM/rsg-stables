@@ -4,7 +4,7 @@ game 'rdr3'
 
 name 'rsg-stables'
 description 'Horse and stables script for RSG Framework'
-version '3.1.0'
+version '3.1.1'
 
 shared_scripts {
     '@ox_lib/init.lua',
@@ -29,6 +29,7 @@ dependencies {
     'ox_lib',
     'ox_target',
     'oxmysql',
+    'rsg-inventory',
 }
 
 ui_page 'html/index.html'

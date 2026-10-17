@@ -271,5 +271,9 @@
     "ui_coat_presets": "Presets",
     "ui_coat_apply": "Apply — $%s",
     "ui_coat_reset": "Restore Natural",
-    "ui_coat_no_change": "No changes"
+    "ui_coat_no_change": "No changes",
+    "release_horse": "馬を手放す",
+    "release_horse_desc": "この死んだ馬を厩舎から完全に削除し、所有枠を空けます。",
+    "horse_released": "%s は安らかに眠りました。",
+    "release_failed": "馬を手放せませんでした。"
 }

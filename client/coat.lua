@@ -170,9 +170,3 @@ function HorseCoat.ApplyNow(ped, raw)
     if not coat or not ped or not DoesEntityExist(ped) then return false end
     return applyOnce(ped, coat)
 end
-
-function HorseCoat.Equal(a, b)
-    a, b = HorseCoat.Normalize(a), HorseCoat.Normalize(b)
-    if not a or not b then return a == b end
-    return a.tint0 == b.tint0 and a.tint1 == b.tint1 and a.tint2 == b.tint2 and a.mane == b.mane and a.tail == b.tail
-end

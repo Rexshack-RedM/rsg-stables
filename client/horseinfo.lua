@@ -52,7 +52,6 @@ local function ListenForPromptEvent(iEventGroup, hWhichEvent, iEventDataSize, tO
                     tOutTable[6] = EventDataStruct:GetInt32(8 * 5)
                     tOutTable[7] = EventDataStruct:GetInt32(8 * 6)
                 else
-                    print('ListenForPromptEvent: bDataExists was false?!')
                     return false
                 end
 
@@ -281,7 +280,6 @@ end
 local function SetAnimalInfoCardActive(b, iEntity)
     if b and not m_InfoCardData.bShowing then
         if not DoesEntityExist(iEntity) or not IsEntityAPed(iEntity) then -- Check if the entity is valid
-            print('SetAnimalInfoCardActive: Invalid iEntity')
             return
         end
 
@@ -291,7 +289,6 @@ local function SetAnimalInfoCardActive(b, iEntity)
 
         -- Ensure no UI is active.
         if not m_InfoCardData.bShowing and CanLaunchUiappByHashWithEntry(ANIMAL_INFO_UIAPP_HASH, iEntry) ~= 1 then
-            print('SetAnimalInfoCardActive: Can not launch the ui app, is any other ui app active by any chance?')
             if IsUiappActiveByHash(ANIMAL_INFO_UIAPP_HASH) ~= 1 then
                 return
             end

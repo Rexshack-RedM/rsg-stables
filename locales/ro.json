@@ -271,5 +271,9 @@
     "ui_coat_presets": "Presets",
     "ui_coat_apply": "Apply — $%s",
     "ui_coat_reset": "Restore Natural",
-    "ui_coat_no_change": "No changes"
+    "ui_coat_no_change": "No changes",
+    "release_horse": "Eliberează calul",
+    "release_horse_desc": "Elimină definitiv acest cal decedat din grajd și eliberează un loc.",
+    "horse_released": "%s a fost înmormântat.",
+    "release_failed": "Calul nu a putut fi eliberat."
 }
