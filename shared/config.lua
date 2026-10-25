@@ -119,6 +119,7 @@ Config.HorseInventory = {
     slots     = 20,       -- stash slots
     distance  = 2.5,      -- ox_target interaction distance
     nativeCargoPrompt = true, -- the game's Horse Cargo prompt (B) beside the horse opens this stash
+    requireSaddlebags = true, -- true: the horse stash can only be opened when saddlebags are fitted (tack); false: always accessible
 }
 
 -- ===================== FLEE =====================

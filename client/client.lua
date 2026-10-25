@@ -973,7 +973,11 @@ local function spawnHorse(horse, coords)
                 icon = 'fas fa-box-open',
                 label = locale('target_inventory'),
                 distance = Config.HorseInventory.distance or 2.5,
-                canInteract = function() return Config.HorseInventory.enabled end,
+                canInteract = function()
+                    if not Config.HorseInventory.enabled then return false end
+                    if not Config.HorseInventory.requireSaddlebags then return true end
+                    return activeHorse and activeHorse.snapshot and decodeTack(activeHorse.snapshot.tack).saddlebags ~= nil
+                end,
                 onSelect = function()
                     if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
                     TriggerServerEvent('rsg-stables:server:openHorseInventory', activeHorse.dbId, NetworkGetNetworkIdFromEntity(activeHorse.entity))
@@ -2333,6 +2337,19 @@ function OpenHorseMenu(stable, horse)
                         NuiNotify(err or locale('revive_failed'), 'error')
                     end
                     OpenStableMenu(stable)
+                end,
+            })
+        end
+
+        -- a dead horse can't be taken out, so its saddlebags are emptied here before releasing it
+        if Config.HorseInventory.enabled then
+            table.insert(options, {
+                title = locale('empty_saddlebags'),
+                description = locale('empty_saddlebags_desc'),
+                icon = 'box-open',
+                onSelect = function()
+                    CloseNUI()
+                    TriggerServerEvent('rsg-stables:server:openDeadHorseInventory', horse.id)
                 end,
             })
         end
