@@ -103,6 +103,7 @@ All settings live in `shared/config.lua`.
 | `Config.HorseNaturalDrink` | Thirst threshold, timings, water/trough radius and trough models |
 | `Config.HorseNaturalGraze` | Hunger threshold, search radius around the player, eat time, cooldown, animation and hay prop models |
 | `Config.HorseBrushItem` | Item required to brush (also usable from the inventory) |
+| `Config.HorseLantern` | Horse lantern on/off, item name, lantern shop-item hash and how close you must be to your horse |
 | `Config.HorseInventory` | Saddlebag stash on/off, max weight, slots, target distance, `nativeCargoPrompt` (B opens the stash) and `requireSaddlebags` (stash only opens with saddlebags fitted) |
 | `Config.HorseBonding` | Bonding gained per feed / water / brush |
 | `Config.HorseFlee` | Flee delay, whether fled horses are stored, respawn distance |
@@ -194,10 +195,17 @@ Target your horse (ox_target) for:
 | `horse_apple`, `horse_carrot` | Use from inventory next to your horse (dismounted), or via **Feed Horse** |
 | `horse_brush` | Use from inventory next to your horse (dismounted), or via **Brush Horse** |
 | `fullbucket` | Used through **Water Horse** |
+| `horse_lantern` | Use from inventory next to or riding your horse to fit / remove a saddle lantern (not consumed). It's saved with the horse's tack, so it stays on until removed |
 
 ---
 
 ## Changelog
+
+### 3.1.4
+- Added a horse lantern: using `horse_lantern` fits or removes a saddle lantern on your active horse and saves it with the tack (`Config.HorseLantern`).
+- Security: horse death reports must now point at a dead entity of the horse's own model (any dead ped could be used before).
+- Security: the saddlebag stash only opens when the targeted entity is the player's own horse model.
+- Clean-up: removed the unused placeholder tack-hash warning thread.
 
 ### 3.1.3
 - Added `Config.HorseInventory.requireSaddlebags` – horse stash only opens when saddlebags are fitted (the target option is hidden otherwise).

@@ -58,6 +58,9 @@ local function applyTackTable(entity, tack)
         local hash = tack[category.key]
         if hash then applyTackItem(entity, hash) end
     end
+    if tack.lantern and Config.HorseLantern and Config.HorseLantern.enabled then
+        applyTackItem(entity, Config.HorseLantern.hash) -- saved horse lantern
+    end
 end
 
 local function decodeTack(raw)
@@ -662,6 +665,43 @@ end)
 -- Using the horse_brush item from the inventory
 RegisterNetEvent('rsg-stables:client:useBrush', function()
     if canCareFromInventory('brush_dismount', 'brush_too_far') then brushActiveHorse() end
+end)
+
+-- ===================== HORSE LANTERN =====================
+RegisterNetEvent('rsg-stables:client:useLantern', function()
+    local cfg = Config.HorseLantern
+    if not (cfg and cfg.enabled) then return end
+    if not (activeHorse and activeHorse.entity and DoesEntityExist(activeHorse.entity)) then
+        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        return
+    end
+    local horse = activeHorse.entity
+    if IsEntityDead(horse) then
+        lib.notify({ description = locale('horse_is_dead'), type = 'error' })
+        return
+    end
+    local ped = cache.ped
+    local riding = GetMount(ped) == horse
+    if not riding and #(GetEntityCoords(ped) - GetEntityCoords(horse)) > (cfg.distance or 3.0) then
+        lib.notify({ description = locale('lantern_too_far'), type = 'error' })
+        return
+    end
+
+    local ok, on = lib.callback.await('rsg-stables:server:toggleLantern', false)
+    if not ok then
+        if on then lib.notify({ description = on, type = 'error' }) end
+        return
+    end
+    if not DoesEntityExist(horse) then return end
+
+    if on then
+        Citizen.InvokeNative(0xD3A7B003ED343FD9, horse, cfg.hash, true, true, true) -- _APPLY_SHOP_ITEM_TO_PED
+        lib.notify({ description = locale('lantern_fitted'), type = 'success' })
+    else
+        Citizen.InvokeNative(0xD710A5007C2AC539, horse, cfg.category, 0) -- _REMOVE_TAG_FROM_META_PED
+        Citizen.InvokeNative(0xCC8CA3E88256E58F, horse, false, true, true, true, false) -- _UPDATE_PED_VARIATION
+        lib.notify({ description = locale('lantern_removed'), type = 'inform' })
+    end
 end)
 
 local function showActiveHorseStats()
@@ -2677,19 +2717,6 @@ CreateThread(function()
 end)
 
 -- ===================== INIT =====================
-
-CreateThread(function()
-    if not Config.Tack.enabled then return end
-    local unverified = 0
-    for _, items in pairs(Config.TackItems) do
-        for _, item in ipairs(items) do
-            if item.verified == false then unverified = unverified + 1 end
-        end
-    end
-    if unverified > 0 then
-        print(('[rsg-stables] WARNING: %d tack item(s) in shared/config.lua still use placeholder hashes and will not visually apply. Replace them with verified hashes before shipping tack customization to players.'):format(unverified))
-    end
-end)
 
 CreateThread(function()
     setupStables()

@@ -236,6 +236,13 @@ local function isTrue(v)
     return v == true or v == 1
 end
 
+-- true if the entity's model is the stored horse model (hashes compared unsigned)
+local function isHorseModel(entity, model)
+    model = tonumber(model)
+    if not model or not entity or entity == 0 or not DoesEntityExist(entity) then return false end
+    return (GetEntityModel(entity) & 0xFFFFFFFF) == (math.floor(model) & 0xFFFFFFFF)
+end
+
 local tackItemIndex = {}
 for categoryKey, items in pairs(Config.TackItems) do
     tackItemIndex[categoryKey] = {}
@@ -413,6 +420,40 @@ end
 -- ===================== HORSE BRUSH ITEM =====================
 RSGCore.Functions.CreateUseableItem(Config.HorseBrushItem or 'horse_brush', function(source)
     TriggerClientEvent('rsg-stables:client:useBrush', source)
+end)
+
+-- ===================== HORSE LANTERN =====================
+if Config.HorseLantern and Config.HorseLantern.enabled then
+    RSGCore.Functions.CreateUseableItem(Config.HorseLantern.item, function(source)
+        local Player = RSGCore.Functions.GetPlayer(source)
+        if not Player then return end
+        TriggerClientEvent('rsg-stables:client:useLantern', source)
+    end)
+end
+
+-- toggles the lantern on the player's active horse and saves it in the horse's tack
+lib.callback.register('rsg-stables:server:toggleLantern', function(source)
+    local cfg = Config.HorseLantern
+    if not (cfg and cfg.enabled) then return false end
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player then return false, locale('player_not_found') end
+    local citizenid = Player.PlayerData.citizenid
+
+    local session = activeSessions[citizenid]
+    if not session then return false, locale('no_active_horse') end
+
+    local lantern = Player.Functions.GetItemByName(cfg.item)
+    if not lantern or (lantern.amount or 0) < 1 then return false end
+
+    return withLock('citizen:' .. citizenid, function()
+        local row = MySQL.single.await('SELECT tack FROM rsg_stables_horses WHERE id = ? AND citizenid = ? AND active = 1 LIMIT 1', { session.horseId, citizenid })
+        if not row then return false, locale('no_active_horse') end
+        local tack = decodeTack(row.tack)
+        local on = not tack.lantern
+        tack.lantern = on or nil
+        MySQL.update.await('UPDATE rsg_stables_horses SET tack = ? WHERE id = ?', { json.encode(tack), session.horseId })
+        return true, on
+    end)
 end)
 
 -- ===================== HORSE STIMULANT =====================
@@ -871,6 +912,8 @@ lib.callback.register('rsg-stables:server:horseDied', function(source, horseId, 
             horseId, Player.PlayerData.citizenid
         })
         if not horse then return false end
+        -- the dead entity must be this horse's model (stops reporting any dead ped to get a free insured heal / remote store)
+        if not isHorseModel(entity, horse.model) then return false end
 
         endSession(Player.PlayerData.citizenid)
 
@@ -1441,10 +1484,10 @@ RegisterNetEvent('rsg-stables:server:openHorseInventory', function(horseId, hors
     local Player = RSGCore.Functions.GetPlayer(src)
     if not Player then return end
 
-    local row = MySQL.single.await('SELECT id, name, tack FROM rsg_stables_horses WHERE id = ? AND citizenid = ? AND active = 1 LIMIT 1', {
+    local row = MySQL.single.await('SELECT id, name, tack, model FROM rsg_stables_horses WHERE id = ? AND citizenid = ? AND active = 1 LIMIT 1', {
         horseId, Player.PlayerData.citizenid
     })
-    if not row then return end
+    if not row or not isHorseModel(horseEntity, row.model) then return end
 
     -- optional: no saddlebags fitted = nowhere to store items
     if Config.HorseInventory.requireSaddlebags then

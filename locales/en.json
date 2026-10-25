@@ -288,5 +288,8 @@
     "no_saddlebags_desc": "Your horse has no saddlebags fitted. Visit a stable to fit some.",
     "release_saddlebags_not_empty": "This horse's saddlebags still hold items. Use Empty Saddlebags first.",
     "empty_saddlebags": "Empty Saddlebags",
-    "empty_saddlebags_desc": "Take out anything left in this horse's saddlebags."
+    "empty_saddlebags_desc": "Take out anything left in this horse's saddlebags.",
+    "lantern_fitted": "Lantern fitted to your horse",
+    "lantern_removed": "Lantern removed from your horse",
+    "lantern_too_far": "You need to be next to or riding your horse"
 }
