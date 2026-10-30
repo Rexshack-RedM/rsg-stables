@@ -196,7 +196,7 @@ RegisterNetEvent('rsg-stables:server:trainingRideTick', function(horseNetId)
 
     -- distance is measured on the horse entity itself, so walking, trains or wagons earn nothing
     local ent = NetworkGetEntityFromNetworkId(math.floor(tonumber(horseNetId) or 0))
-    if not ent or ent == 0 or not DoesEntityExist(ent) or GetEntityHealth(ent) <= 0 then return end
+    if not ent or ent == 0 or not DoesEntityExist(ent) then return end -- (server GetEntityHealth is always 0 on RedM)
     if (GetEntityModel(ent) & 0xFFFFFFFF) ~= (math.floor(tonumber(horse.model) or 0) & 0xFFFFFFFF) then return end
     local coords = GetEntityCoords(ent)
     if #(GetEntityCoords(GetPlayerPed(src)) - coords) > RIDER_DISTANCE then

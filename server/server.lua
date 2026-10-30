@@ -330,14 +330,25 @@ end
 -- ===================== ACTIVE HORSE ENTITY CHECK =====================
 -- true if netId is a live entity of the session's horse model within maxDist of the player
 local function activeHorseNear(src, session, netId, maxDist)
+    local function fail(why)
+        if Config.DebugHorseChecks then print(('[rsg-stables] horse check failed for %s: %s'):format(src, why)) end
+        return false
+    end
     netId = tonumber(netId)
-    if not session or not netId then return false end
+    if not session then return fail('no session') end
+    if not netId then return fail('client sent no net id (horse not networked)') end
     local entity = NetworkGetEntityFromNetworkId(math.floor(netId))
-    if not entity or entity == 0 or not DoesEntityExist(entity) or GetEntityHealth(entity) <= 0 then return false end
-    if session.model and not isHorseModel(entity, session.model) then return false end
+    if not entity or entity == 0 or not DoesEntityExist(entity) then return fail('net id ' .. netId .. ' has no entity on server') end
+    -- no server-side health check: RedM's server GetEntityHealth returns 0 for peds, so it rejected every live horse.
+    -- Dead horses are blocked on the client and by the session's own death/down handling.
+    if session.model and not isHorseModel(entity, session.model) then
+        return fail(('model mismatch: entity %s, session %s'):format(GetEntityModel(entity), tostring(session.model)))
+    end
     local ped = GetPlayerPed(src)
-    if not ped or ped == 0 then return false end
-    return #(GetEntityCoords(ped) - GetEntityCoords(entity)) <= maxDist, entity
+    if not ped or ped == 0 then return fail('no player ped') end
+    local dist = #(GetEntityCoords(ped) - GetEntityCoords(entity))
+    if dist > maxDist then return fail(('too far: %.1fm (max %.1fm)'):format(dist, maxDist)) end
+    return true, entity
 end
 
 -- ===================== PLAYER CLEANUP =====================
@@ -929,6 +940,44 @@ lib.callback.register('rsg-stables:server:fleeStoreHorse', function(source, hors
     return storeActive(source, horseId, health, stamina, false)
 end)
 
+-- ===================== DEATH VERIFICATION =====================
+-- RedM's server GetEntityHealth returns 0 for every ped, so the server can't see whether a horse is dead.
+-- Instead, other players who have the horse streamed in are asked; if any of them sees it alive the report
+-- is rejected. If nobody else is around the report is accepted, but the horse entity is deleted, so a
+-- false report only costs the player their horse/insurance and gains nothing.
+local WITNESS_RANGE, WITNESS_MAX, WITNESS_TIMEOUT = 150.0, 4, 2500
+
+local function witnessesSayAlive(src, entity, netId)
+    local coords = GetEntityCoords(entity)
+    local list = {}
+    for _, pid in ipairs(GetPlayers()) do
+        pid = tonumber(pid)
+        if pid ~= src then
+            local ped = GetPlayerPed(pid)
+            if ped ~= 0 then
+                local d = #(GetEntityCoords(ped) - coords)
+                if d <= WITNESS_RANGE then list[#list + 1] = { id = pid, d = d } end
+            end
+        end
+    end
+    if #list == 0 then return false end
+    table.sort(list, function(a, b) return a.d < b.d end)
+
+    local alive, pending = false, math.min(#list, WITNESS_MAX)
+    for i = 1, pending do
+        lib.callback('rsg-stables:client:isHorseDead', list[i].id, function(dead)
+            if dead == false then alive = true end -- nil = witness doesn't have the horse streamed: no vote
+            pending = pending - 1
+        end, netId)
+    end
+    local deadline = GetGameTimer() + WITNESS_TIMEOUT
+    while pending > 0 and not alive and GetGameTimer() < deadline do Wait(100) end
+    if alive then
+        print(('[rsg-stables] player %s reported horse (net %s) dead/down but a nearby player sees it alive - rejected'):format(src, netId))
+    end
+    return alive
+end
+
 local killHorseRecord -- defined below
 
 lib.callback.register('rsg-stables:server:horseDied', function(source, horseId, netId)
@@ -941,9 +990,10 @@ lib.callback.register('rsg-stables:server:horseDied', function(source, horseId, 
     -- the report must point at an existing entity (a missing netId used to skip this check)
     netId = toId(netId)
     local entity = netId and NetworkGetEntityFromNetworkId(netId) or 0
-    if entity == 0 or not DoesEntityExist(entity) or GetEntityHealth(entity) > 0 then
+    if entity == 0 or not DoesEntityExist(entity) then
         return false
     end
+    if witnessesSayAlive(source, entity, netId) then return false end
 
     return withLock('citizen:' .. Player.PlayerData.citizenid, function()
         -- only the horse that is actually out can die (stops a client killing/"insurance-healing" stabled horses)
@@ -954,6 +1004,8 @@ lib.callback.register('rsg-stables:server:horseDied', function(source, horseId, 
         -- the dead entity must be this horse's model (stops reporting any dead ped to get a free insured heal / remote store)
         if not isHorseModel(entity, horse.model) then return false end
 
+        -- remove the entity so a horse that was falsely reported dead can't carry on being used
+        if DoesEntityExist(entity) then DeleteEntity(entity) end
         endSession(Player.PlayerData.citizenid)
         return killHorseRecord(horse, source)
     end)
@@ -982,10 +1034,11 @@ local function validateDownedHorse(src, citizenid, netId)
     if not session then return nil end
     netId = toId(netId)
     local entity = netId and NetworkGetEntityFromNetworkId(netId) or 0
-    if entity == 0 or not DoesEntityExist(entity) or GetEntityHealth(entity) > 0 then return nil end
+    if entity == 0 or not DoesEntityExist(entity) then return nil end
     local horse = MySQL.single.await('SELECT * FROM rsg_stables_horses WHERE id = ? AND citizenid = ? AND active = 1', { session.horseId, citizenid })
     if not horse or not isHorseModel(entity, horse.model) then return nil end
     if #(GetEntityCoords(entity) - GetEntityCoords(GetPlayerPed(src))) > 300.0 then return nil end
+    if witnessesSayAlive(src, entity, netId) then return nil end
     return session, horse
 end
 
@@ -1810,7 +1863,7 @@ lib.callback.register('rsg-stables:server:fenceHorse', function(source, fenceInd
     netId = toId(netId)
     local entity = netId and NetworkGetEntityFromNetworkId(netId) or 0
     if not isClaimableEntity(entity) then return false, locale('fence_no_horse') end
-    if GetEntityHealth(entity) <= 0 then return false, locale('fence_no_horse') end
+    -- (no server GetEntityHealth check: RedM's server returns 0 for peds, which blocked every fence sale)
     -- owned horses are script-spawned (rejected above); the state bag is a second check, but it is
     -- client-writable so it can't be the only one (a cleared bag let players fence their own horse,
     -- whistle it back and fence it again for endless money)

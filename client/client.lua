@@ -4,12 +4,24 @@ lib.locale()
 local stablePeds = {}
 local stableBlips = {}
 local activeHorse = nil -- { entity = int, dbId = int, maxhealth = int, snapshot = table, hunger = num, thirst = num }
+
+-- read-only accessor for the other client files (actions.lua)
+function GetActiveHorseEntity()
+    local ent = activeHorse and activeHorse.entity
+    if ent and DoesEntityExist(ent) and not IsEntityDead(ent) then return ent end
+    return nil
+end
+
+function GetActiveHorseName()
+    local snap = activeHorse and activeHorse.snapshot
+    return (snap and snap.name) or locale('your_horse')
+end
 local horseBlip = nil
 local pendingHorse = nil -- horse that is 'out' in the DB but has no entity (fled, or restored after relog); whistle recalls it
 local recallPendingHorse
 local NuiStatsDialog
 local CARE_COOLDOWN = 60000 -- ms; mirrors server.lua's CARE_COOLDOWN (client-side cooldown is UX only, server enforces the real limit)
-local HORSE_TARGETS = { 'rsg_stables_feed', 'rsg_stables_water', 'rsg_stables_brush', 'rsg_stables_stats', 'rsg_stables_store', 'rsg_stables_flee', 'rsg_stables_inventory' }
+local HORSE_TARGETS = { 'rsg_stables_feed', 'rsg_stables_water', 'rsg_stables_brush', 'rsg_stables_stats', 'rsg_stables_store', 'rsg_stables_flee', 'rsg_stables_inventory', 'rsg_stables_actions' }
 
 local function healthPctOf(entity)
     return math.floor((GetEntityHealth(entity) / math.max(1, GetEntityMaxHealth(entity))) * 100)
@@ -711,12 +723,13 @@ local function brushActiveHorse()
 end
 
 -- Inventory-use checks shared by the feed items and the brush: horse out, dismounted, close by
-local function canCareFromInventory(dismountKey, tooFarKey)
+local function canCareFromInventory(dismountKey, tooFarKey, allowMounted)
     if not (activeHorse and DoesEntityExist(activeHorse.entity)) then
         lib.notify({ description = locale('no_active_horse'), type = 'error' })
         return false
     end
     if GetMount(cache.ped) == activeHorse.entity then
+        if allowMounted then return true end
         lib.notify({ description = locale(dismountKey), type = 'error' })
         return false
     end
@@ -788,7 +801,7 @@ end)
 
 -- Using the horse_brush item from the inventory
 RegisterNetEvent('rsg-stables:client:useBrush', function()
-    if canCareFromInventory('brush_dismount', 'brush_too_far') then brushActiveHorse() end
+    if canCareFromInventory('brush_dismount', 'brush_too_far', Config.HorseBrushMounted) then brushActiveHorse() end
 end)
 
 -- ===================== HORSE LANTERN =====================
@@ -980,11 +993,12 @@ RegisterNUICallback('horseCardAction', function(data, cb)
         return
     end
     if not (activeHorse and DoesEntityExist(activeHorse.entity)) then return end
-    if GetMount(cache.ped) == activeHorse.entity then
+    local mounted = GetMount(cache.ped) == activeHorse.entity
+    if mounted and not (action == 'brush' and Config.HorseBrushMounted) then
         lib.notify({ description = locale('card_dismount_hint'), type = 'error' })
         return
     end
-    if #(GetEntityCoords(cache.ped) - GetEntityCoords(activeHorse.entity)) > (Config.HorseBrushDistance or 3.0) then
+    if not mounted and #(GetEntityCoords(cache.ped) - GetEntityCoords(activeHorse.entity)) > (Config.HorseBrushDistance or 3.0) then
         lib.notify({ description = locale('must_be_near_horse'), type = 'error' })
         return
     end
@@ -1295,6 +1309,14 @@ local function spawnHorse(horse, coords)
                 distance = 2.5,
                 canInteract = function() return Config.HorseFlee.enabled end,
                 onSelect = fleeActiveHorse,
+            },
+            {
+                name = 'rsg_stables_actions',
+                icon = 'fas fa-horse-head',
+                label = locale('target_actions'),
+                distance = 2.5,
+                canInteract = function() return Config.HorseActions and Config.HorseActions.enabled and GetMount(cache.ped) == 0 end,
+                onSelect = function() OpenHorseActionsMenu() end,
             },
             {
                 name = 'rsg_stables_inventory',
@@ -3193,4 +3215,14 @@ AddEventHandler('onResourceStop', function(resource)
     saveActiveHorsePosition(true)
     despawnActiveHorseEntity()
     despawnPreviewHorse()
+end)
+
+-- asked by the server to confirm another player's horse is dead (the server can't read ped health on RedM)
+-- returns nil when this client doesn't have the horse, so it doesn't count as a vote
+lib.callback.register('rsg-stables:client:isHorseDead', function(netId)
+    netId = tonumber(netId)
+    if not netId or not NetworkDoesNetworkIdExist(netId) then return nil end
+    local ent = NetworkGetEntityFromNetworkId(netId)
+    if not ent or ent == 0 or not DoesEntityExist(ent) then return nil end
+    return IsEntityDead(ent) or GetEntityHealth(ent) <= 0
 end)
