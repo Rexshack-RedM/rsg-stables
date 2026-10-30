@@ -375,5 +375,8 @@
     "hint_thirst_warn": "Wird durstig",
     "hint_thirst_bad": "Dehydriert — tränke es jetzt, es verliert Gesundheit",
     "hint_clean_warn": "Schmutzig — eine Bürste würde helfen",
-    "hint_clean_bad": "Verdreckt — bürste es, um eure Bindung zu stärken"
+    "hint_clean_bad": "Verdreckt — bürste es, um eure Bindung zu stärken",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

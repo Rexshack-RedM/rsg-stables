@@ -375,5 +375,8 @@
     "hint_thirst_warn": "Tiene sed",
     "hint_thirst_bad": "Deshidratado — dale agua ya, está perdiendo salud",
     "hint_clean_warn": "Sucio — un cepillado ayudaría",
-    "hint_clean_bad": "Muy sucio — cepíllalo para reforzar el vínculo"
+    "hint_clean_bad": "Muy sucio — cepíllalo para reforzar el vínculo",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

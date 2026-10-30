@@ -375,5 +375,8 @@
     "hint_thirst_warn": "Commence à avoir soif",
     "hint_thirst_bad": "Déshydraté — abreuvez-le, il perd de la santé",
     "hint_clean_warn": "Sale — un brossage aiderait",
-    "hint_clean_bad": "Très sale — brossez-le pour renforcer votre lien"
+    "hint_clean_bad": "Très sale — brossez-le pour renforcer votre lien",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

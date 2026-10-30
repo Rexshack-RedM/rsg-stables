@@ -375,5 +375,8 @@
     "hint_thirst_warn": "Διψάει",
     "hint_thirst_bad": "Αφυδατωμένο — πότισέ το τώρα, χάνει υγεία",
     "hint_clean_warn": "Βρώμικο — ένα βούρτσισμα θα βοηθούσε",
-    "hint_clean_bad": "Πολύ βρώμικο — βούρτσισέ το για να δυναμώσει ο δεσμός"
+    "hint_clean_bad": "Πολύ βρώμικο — βούρτσισέ το για να δυναμώσει ο δεσμός",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

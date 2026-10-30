@@ -375,5 +375,8 @@
     "hint_thirst_warn": "Ficando com sede",
     "hint_thirst_bad": "Desidratado — dê água agora, está perdendo saúde",
     "hint_clean_warn": "Sujo — uma escovada ajudaria",
-    "hint_clean_bad": "Imundo — escove-o para fortalecer o vínculo"
+    "hint_clean_bad": "Imundo — escove-o para fortalecer o vínculo",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

@@ -375,5 +375,8 @@
     "hint_thirst_warn": "I se face sete",
     "hint_thirst_bad": "Deshidratat — adapă-l acum, pierde sănătate",
     "hint_clean_warn": "Murdar — o periere ar ajuta",
-    "hint_clean_bad": "Foarte murdar — perie-l pentru a întări legătura"
+    "hint_clean_bad": "Foarte murdar — perie-l pentru a întări legătura",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

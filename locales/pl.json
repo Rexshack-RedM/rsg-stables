@@ -375,5 +375,8 @@
     "hint_thirst_warn": "Robi się spragniony",
     "hint_thirst_bad": "Odwodniony — napój go, traci zdrowie",
     "hint_clean_warn": "Brudny — przydałoby się wyczesanie",
-    "hint_clean_bad": "Bardzo brudny — wyczesz go, by wzmocnić więź"
+    "hint_clean_bad": "Bardzo brudny — wyczesz go, by wzmocnić więź",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

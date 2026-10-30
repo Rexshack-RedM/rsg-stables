@@ -375,5 +375,8 @@
     "hint_thirst_warn": "Getting thirsty",
     "hint_thirst_bad": "Dehydrated — water it now, it's losing health",
     "hint_clean_warn": "Dirty — a brush would help",
-    "hint_clean_bad": "Filthy — brush it to build your bond"
+    "hint_clean_bad": "Filthy — brush it to build your bond",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

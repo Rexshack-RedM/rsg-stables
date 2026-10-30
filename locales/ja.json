@@ -375,5 +375,8 @@
     "hint_thirst_warn": "喉が渇いてきた",
     "hint_thirst_bad": "脱水 — すぐに水を、体力が減っています",
     "hint_clean_warn": "汚れている — ブラッシングを",
-    "hint_clean_bad": "泥だらけ — ブラッシングで絆を深めましょう"
+    "hint_clean_bad": "泥だらけ — ブラッシングで絆を深めましょう",
+    "horseshoe_title": "Horseshoes",
+    "horseshoe_none": "Your horse has no shoes and will be slow and tire quickly. Get shoes fitted at a stable.",
+    "horseshoe_thrown": "Your horse threw a shoe! It will ride poorly until new shoes are fitted at a stable."
 }

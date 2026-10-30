@@ -4,7 +4,7 @@ game 'rdr3'
 
 name 'rsg-stables'
 description 'Horse and stables script for RSG Framework'
-version '3.2.0'
+version '3.3.0'
 
 shared_scripts {
     '@ox_lib/init.lua',

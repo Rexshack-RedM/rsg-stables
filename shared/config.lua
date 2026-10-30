@@ -78,6 +78,7 @@ Config.HorseHitch = {
 -- ===================== NATURAL DRINKING (rivers / lakes / troughs) =====================
 Config.HorseNaturalDrink = {
     enabled         = true,
+    maxPlayerDistance = 50.0, -- server check: the horse must be within this distance of its owner to drink
     thirstThreshold = 40,    -- horse only drinks when thirst is at/below this
     thirstRestore   = 100,   -- thirst is restored to this value (0-100)
     checkInterval   = 2000,  -- ms between proximity checks
@@ -95,6 +96,7 @@ Config.HorseNaturalDrink = {
 -- ===================== NATURAL GRAZING (hay near the player) =====================
 Config.HorseNaturalGraze = {
     enabled         = true,
+    maxPlayerDistance = 50.0, -- server check: the horse must be within this distance of its owner to graze
     hungerThreshold = 40,     -- horse only goes looking for hay when hunger is at/below this
     hungerRestore   = 100,    -- hunger is restored to this value (0-100)
     checkInterval   = 3000,   -- ms between checks for nearby hay
@@ -115,6 +117,24 @@ Config.HorseNaturalGraze = {
 -- ===================== HORSE LANTERN =====================
 -- Using the item toggles a saddle lantern on your active horse (item is not consumed).
 -- Hashes as used by rsg-horses (github.com/RexShack/rsg-horses, client/client.lua)
+-- When true, long guns are only stored on the horse if a holster is fitted (mirrors RDR2 player_horse.c).
+-- When false, the game default applies (any owned horse stores long guns).
+Config.HolsterStoresLongarms = true
+
+-- ===================== HORSESHOES =====================
+-- Horses without horseshoes ride much worse. While riding at speed a shoe can be thrown, and the
+-- horse stays degraded until new shoes are fitted at a stable (tack menu -> Horseshoes).
+Config.Horseshoes = {
+    enabled        = true,
+    unshodMoveRate = 0.80,  -- move-rate multiplier while riding without shoes (1.0 = no slow-down)
+    unshodStaminaDrain = 1.5, -- extra stamina drained per second while moving fast without shoes (0 = off)
+    throwChance    = 3,     -- % chance a shoe is thrown on each check
+    checkInterval  = 60,    -- seconds between throw checks while riding
+    minSpeed       = 5.0,   -- horse speed (m/s) needed for a check to count (about a canter)
+    newHorsesShod  = true,  -- bought horses and foals come with shoes fitted (wild horses never do)
+    remindOnMount  = true,  -- tell the player when they mount a horse that has no shoes
+}
+
 Config.HorseLantern = {
     enabled  = true,
     item     = 'horse_lantern',
@@ -1669,7 +1689,7 @@ Config.TackCategories = {
     { key = 'mane',       label = 'Mane' },
     { key = 'mask',       label = 'Mask' },
     { key = 'mustache',   label = 'Mustache' },
-    { key = 'holster',    label = 'Holster', required = true }, -- required = a style must be fitted (no 'None'); the holster is needed to carry weapons on the horse
+    { key = 'holster',    label = 'Holster' }, -- optional: without a holster, long guns stay on the player instead of being stored on the horse (see Config.HolsterStoresLongarms)
     { key = 'bridle',     label = 'Bridle' },
     { key = 'horseshoe',  label = 'Horseshoes' },
 }
