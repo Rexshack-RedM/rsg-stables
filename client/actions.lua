@@ -3,7 +3,7 @@
 -- Scenarios: RDR3 decompiled scripts (1436, player_horse.c / ambient scenario tables) and
 -- rdr3_discoveries animations/scenarios/scenario_types_with_conditional_anims.lua.
 -- Horse action ids: rdr3_discoveries tasks/TASK_HORSE_ACTION. Natives: rsg-redm-brain natives/db.
-lib.locale()
+local RSGCore = exports['rsg-core']:GetCoreObject()
 
 local CFG = Config.HorseActions
 if not (CFG and CFG.enabled) then return end
@@ -13,11 +13,11 @@ local current = nil -- { id, horse, regen }
 local function horseNearby()
     local horse = GetActiveHorseEntity and GetActiveHorseEntity()
     if not horse then
-        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        RSGCore.Functions.Notify({ description = locale('no_active_horse'), type = 'error' })
         return nil
     end
-    if #(GetEntityCoords(cache.ped) - GetEntityCoords(horse)) > (CFG.maxDistance or 6.0) then
-        lib.notify({ description = locale('must_be_near_horse'), type = 'error' })
+    if #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(horse)) > (CFG.maxDistance or 6.0) then
+        RSGCore.Functions.Notify({ description = locale('must_be_near_horse'), type = 'error' })
         return nil
     end
     return horse
@@ -38,7 +38,17 @@ local function playAnim(horse, dict, clip, loop)
     return math.floor((GetAnimDuration(dict, clip) or 0) * 1000)
 end
 
+-- natives from rsg-redm-brain natives/db/TASK.md (used the same way in decompiled av_walk_with_horse.c)
+local function isLeading(ped) return Citizen.InvokeNative(0xEFC4303DDC6E60D3, ped) == 1 end -- _IS_PED_LEADING_HORSE
+local function stopLeading(ped) Citizen.InvokeNative(0xED27560703F37258, ped) end            -- TASK_STOP_LEADING_HORSE
+
 local function stopAction(silent)
+    if current and current.lead then
+        if isLeading(PlayerPedId()) then stopLeading(PlayerPedId()) end
+        if not silent then RSGCore.Functions.Notify({ description = locale('action_stopped'), type = 'inform' }) end
+        current = nil
+        return
+    end
     if current and DoesEntityExist(current.horse) then
         local a = current.anim
         if a and a.exitDict and IsEntityPlayingAnim(current.horse, a.dict, a.base, 3) then
@@ -51,7 +61,7 @@ local function stopAction(silent)
         else
             ClearPedTasks(current.horse, true, true)
         end
-        if not silent then lib.notify({ description = locale('action_stopped'), type = 'inform' }) end
+        if not silent then RSGCore.Functions.Notify({ description = locale('action_stopped'), type = 'inform' }) end
     end
     current = nil
 end
@@ -79,8 +89,9 @@ local function watchLoop(token)
         Wait(3000) -- give the scenario time to start
         while current == token do
             local h = token.horse
-            if not DoesEntityExist(h) or IsEntityDead(h) or GetMount(cache.ped) == h then current = nil return end
+            if not DoesEntityExist(h) or IsEntityDead(h) or GetMount(PlayerPedId()) == h then current = nil return end
             if token.scenario and not IsPedUsingAnyScenario(h) then current = nil return end
+            if token.lead and token.leadReady and not isLeading(PlayerPedId()) then current = nil return end
             if token.anim and token.animReady and not IsEntityPlayingAnim(h, token.anim.dict, token.anim.base, 3) then current = nil return end
             Wait(1000)
         end
@@ -99,7 +110,7 @@ local function startAction(action)
         ClearPedTasks(horse, true, true)
         local token = { id = action.id, horse = horse, anim = action.anim }
         current = token
-        lib.notify({ description = locale('action_' .. action.id .. '_started'), type = 'success' })
+        RSGCore.Functions.Notify({ description = locale('action_' .. action.id .. '_started'), type = 'success' })
         CreateThread(function()
             local a = action.anim
             if a.enterDict then
@@ -122,26 +133,36 @@ local function startAction(action)
         ClearPedTasks(horse, true, true)
         local function task()
             -- TASK_FOLLOW_TO_OFFSET_OF_ENTITY(ped, entity, x, y, z, speed, timeout, stoppingRange, persist, p9, walkOnly, p11, p12, p13)
-            Citizen.InvokeNative(0x304AE42E357B8C7E, horse, cache.ped, f.offset.x, f.offset.y, f.offset.z,
+            Citizen.InvokeNative(0x304AE42E357B8C7E, horse, PlayerPedId(), f.offset.x, f.offset.y, f.offset.z,
                 f.speed or 3.0, -1, f.stoppingRange or 1.0, true, false, false, false, false, false)
         end
         task()
         local token = { id = action.id, horse = horse }
         current = token
-        lib.notify({ description = locale('action_follow_started'), type = 'success' })
+        RSGCore.Functions.Notify({ description = locale('action_follow_started'), type = 'success' })
         watchLoop(token)
         CreateThread(function()
             while current == token and DoesEntityExist(horse) do
                 Wait(2000)
                 if current ~= token then return end
-                local d = #(GetEntityCoords(cache.ped) - GetEntityCoords(horse))
-                if d > (f.teleportDistance or 60.0) and not IsPedOnMount(cache.ped) then
-                    local p = GetOffsetFromEntityInWorldCoords(cache.ped, f.offset.x, f.offset.y - 3.0, 0.0)
+                local d = #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(horse))
+                if d > (f.teleportDistance or 60.0) and not IsPedOnMount(PlayerPedId()) then
+                    local p = FindOpenHorseSpot(PlayerPedId(), 8.0) -- open ground, not inside walls or water
                     SetEntityCoords(horse, p.x, p.y, p.z, false, false, false, true)
+                    SetEntityHeading(horse, p.w)
                     task()
                 end
             end
         end)
+        return
+    elseif action.lead then
+        ClearPedTasks(horse, true, true)
+        Citizen.InvokeNative(0x9A7A4A54596FE09D, PlayerPedId(), horse) -- TASK_LEAD_HORSE(ped, horse)
+        local token = { id = action.id, horse = horse, lead = true }
+        current = token
+        RSGCore.Functions.Notify({ description = locale('action_lead_started'), type = 'success' })
+        SetTimeout(1500, function() token.leadReady = true end) -- the player walks over to the reins first
+        watchLoop(token)
         return
     elseif action.stay then
         ClearPedTasks(horse, true, true)
@@ -149,7 +170,7 @@ local function startAction(action)
     end
 
     current = { id = action.id, horse = horse, scenario = action.scenario ~= nil }
-    lib.notify({ description = locale('action_' .. action.id .. '_started'), type = 'success' })
+    RSGCore.Functions.Notify({ description = locale('action_' .. action.id .. '_started'), type = 'success' })
     if action.regen then regenLoop(current) end
     watchLoop(current)
 end
@@ -205,8 +226,8 @@ end)
 
 if CFG.command then
     RegisterCommand(CFG.command, function()
-        if GetMount(cache.ped) ~= 0 then
-            lib.notify({ description = locale('action_dismount'), type = 'error' })
+        if GetMount(PlayerPedId()) ~= 0 then
+            RSGCore.Functions.Notify({ description = locale('action_dismount'), type = 'error' })
             return
         end
         OpenHorseActionsMenu()
@@ -215,8 +236,8 @@ end
 
 -- ===================== PER-ACTION COMMANDS =====================
 local function canCommand()
-    if GetMount(cache.ped) ~= 0 then
-        lib.notify({ description = locale('action_dismount'), type = 'error' })
+    if GetMount(PlayerPedId()) ~= 0 then
+        RSGCore.Functions.Notify({ description = locale('action_dismount'), type = 'error' })
         return false
     end
     return true
@@ -246,7 +267,7 @@ if CFG.rearKey and CFG.rearKey.enabled then
     CreateThread(function()
         while true do
             local horse = GetActiveHorseEntity and GetActiveHorseEntity()
-            if not (horse and GetMount(cache.ped) == horse) then
+            if not (horse and GetMount(PlayerPedId()) == horse) then
                 Wait(500)
             else
                 Wait(0)
@@ -261,7 +282,7 @@ if CFG.rearKey and CFG.rearKey.enabled then
                             TaskPlayAnim(horse, A.horse.dict, A.horse.clip, 4.0, -4.0, -1, A.horse.flag or 8208, 0.0, false, 0, false, '', false)
                         end
                         if A.rider and loadDict(A.rider.dict) then
-                            TaskPlayAnim(cache.ped, A.rider.dict, A.rider.clip, 4.0, -4.0, -1, 0, 0.0, false, 0, false, '', false)
+                            TaskPlayAnim(PlayerPedId(), A.rider.dict, A.rider.clip, 4.0, -4.0, -1, 0, 0.0, false, 0, false, '', false)
                         end
                     end
                 end
@@ -273,6 +294,7 @@ end
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     if nuiOpen then SetNuiFocus(false, false) end
+    if current and current.lead and isLeading(PlayerPedId()) then stopLeading(PlayerPedId()) end
     if current and DoesEntityExist(current.horse) then ClearPedTasks(current.horse, true, true) end
     current = nil
 end)

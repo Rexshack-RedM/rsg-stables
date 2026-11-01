@@ -1,6 +1,10 @@
 -- rsg-stables: horse training (ride XP + paid stable sessions)
 local RSGCore = exports['rsg-core']:GetCoreObject()
-lib.locale()
+
+-- rsg-core server callback with return-style handlers: fn(source, ...) returns the reply values
+local function registerCallback(name, fn)
+    RSGCore.Functions.CreateCallback(name, function(source, cb, ...) cb(fn(source, ...)) end)
+end
 
 local T = Config.Training
 if not (T and T.enabled) then return end
@@ -69,7 +73,7 @@ end
 
 local function notifyLevelUps(src, horseName, ups)
     for _, u in ipairs(ups) do
-        TriggerClientEvent('ox_lib:notify', src, {
+        TriggerClientEvent('RSGCore:Client:Notify', src, {
             title = locale('training_title'),
             description = locale('training_level_up', horseName, locale('training_' .. u.stat), u.level),
             type = 'success', duration = 7000,
@@ -95,7 +99,7 @@ local function chargePlayer(Player, amount)
 end
 
 -- ===================== CALLBACKS =====================
-lib.callback.register('rsg-stables:server:getTraining', function(source)
+registerCallback('rsg-stables:server:getTraining', function(source)
     local Player = RSGCore.Functions.GetPlayer(source)
     if not Player then return nil end
     local horse = getActiveHorse(Player.PlayerData.citizenid)
@@ -110,7 +114,7 @@ end)
 
 local pending = {} -- [src] = { token, stat, horseId, startedAt, rounds }
 
-lib.callback.register('rsg-stables:server:startTraining', function(source, stat, horseNetId)
+registerCallback('rsg-stables:server:startTraining', function(source, stat, horseNetId)
     local src = source
     if not T.session.enabled then return false, locale('training_disabled') end
     local Player = RSGCore.Functions.GetPlayer(src)
@@ -124,6 +128,7 @@ lib.callback.register('rsg-stables:server:startTraining', function(source, stat,
 
     local ent = NetworkGetEntityFromNetworkId(tonumber(horseNetId) or 0)
     if not ent or ent == 0 or not DoesEntityExist(ent)
+        or (GetEntityModel(ent) & 0xFFFFFFFF) ~= (math.floor(tonumber(horse.model) or 0) & 0xFFFFFFFF) -- must be this horse, not any ped
         or #(GetEntityCoords(ent) - GetEntityCoords(GetPlayerPed(src))) > T.session.horseDistance then
         return false, locale('training_too_far')
     end
@@ -146,7 +151,7 @@ lib.callback.register('rsg-stables:server:startTraining', function(source, stat,
     return true, { token = token, rounds = T.session.rounds, roundMs = T.session.roundMs }
 end)
 
-lib.callback.register('rsg-stables:server:finishTraining', function(source, token, hits)
+registerCallback('rsg-stables:server:finishTraining', function(source, token, hits)
     local src = source
     local p = pending[src]
     if not p or p.token ~= token then return false, locale('training_expired') end

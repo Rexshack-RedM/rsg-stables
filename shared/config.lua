@@ -10,6 +10,7 @@ Config.StoreDistance       = 8.0    -- max distance player's mount can be from s
 Config.PaymentAccount      = 'cash' -- 'cash' or 'bank'
 Config.WhistleStopDistance = 1.0 -- whistled horse stops this many meters in front of the player (measured to the horse's nose)
 Config.WhistleAnim = 'WHISTLEHORSESHORT' -- whistle sound + animation played on H ('WHISTLEHORSESHORT', 'WHISTLEHORSELONG', 'WHISTLEHORSEDOUBLE'), false to disable
+Config.WhistleSpawnDistance = 12.0 -- when moved closer, the horse is placed on open ground about this far away (preferring behind you) with a clear run to you
 Config.WhistleTeleportDistance = 60.0 -- if the active horse is farther than this when whistled, it's moved near the player instead of walking/running over
 Config.AllowTwoPlayersRide = false
 
@@ -160,14 +161,14 @@ Config.HorseBonding = {
     brushGain = 2, -- bonding gained per successful Brush Horse (grooming bonds the most)
 }
 
-Config.HideNativeBrushFeed = true -- hide the game's own Brush / Feed horse prompts (ox_target options are used instead)
+Config.HideNativeBrushFeed = true -- hide the game's own Brush / Feed horse prompts (rsg-target options are used instead)
 
 -- ===================== HORSE INVENTORY =====================
 Config.HorseInventory = {
     enabled   = true,     -- adds an "Open Saddlebags" target prompt to the player's active horse (rsg-inventory stash)
     maxweight = 40000,    -- stash max weight (grams)
     slots     = 20,       -- stash slots
-    distance  = 2.5,      -- ox_target interaction distance
+    distance  = 2.5,      -- rsg-target interaction distance
     nativeCargoPrompt = true, -- the game's Horse Cargo prompt (B) beside the horse opens this stash
     requireSaddlebags = true, -- true: the horse stash can only be opened when saddlebags are fitted (tack); false: always accessible
 }
@@ -240,6 +241,9 @@ Config.HorseActions = {
         } },
         { id = 'rear', glyph = '\u{2191}',   horseAction = 5 },  -- rear up
         { id = 'stay', glyph = '\u{270B}',   stay = true },      -- stand still until told otherwise
+        -- TASK_LEAD_HORSE / TASK_STOP_LEADING_HORSE / _IS_PED_LEADING_HORSE (rsg-redm-brain natives/db/TASK.md),
+        -- as used by the decompiled av_walk_with_horse.c: walk your horse by the reins
+        { id = 'lead', glyph = '\u{2194}', lead = true },
         -- TASK_FOLLOW_TO_OFFSET_OF_ENTITY (rsg-redm-brain natives/db/TASK.md): walks behind you until stopped, mounted or whistled
         { id = 'follow', glyph = '\u{27A4}', follow = {
             offset = vector3(0.8, -2.5, 0.0), -- metres to your right / behind you
@@ -2435,6 +2439,15 @@ Config.HorseSell = {
     percent      = 0.5,  -- of the breed's buy price
     perTrainedLevel = 5, -- extra $ per trained level (all stats)
     minPrice     = 5,
+    -- appraisal (like the decompiled shop_horse_shop.c / loanshark_sellhorse1.c horse valuation):
+    -- the stablehand inspects the horse and adjusts the base price. The breakdown is shown before you sell.
+    appraisal = {
+        enabled        = true,
+        conditionWeight = 0.3,  -- up to -30% for a horse in poor condition (average of health, hunger and thirst)
+        bondingBonus   = 0.2,   -- up to +20% at full bonding
+        stage          = { young = 0.8, adult = 1.0, old = 0.6 }, -- multiplier by age stage (Config.HorseAging)
+        shodBonus      = 5,     -- flat $ if the horse has shoes fitted
+    },
 }
 
 -- Horse fence: sell wild or stolen (unowned) horses for blood money, no questions asked.
@@ -2484,7 +2497,7 @@ Config.Training = {
         split       = { stamina = 0.6, speed = 0.4 }, -- how ride XP is shared between stats
     },
 
-    -- paid training sessions at a stable (ox_target on your horse)
+    -- paid training sessions at a stable (rsg-target on your horse)
     session = {
         enabled        = true,
         price          = { health = 10, stamina = 10, speed = 15, accel = 15, courage = 10 }, -- taken from Config.PaymentAccount
@@ -2497,3 +2510,56 @@ Config.Training = {
         horseDistance  = 6.0,   -- how close to your horse you must be
     },
 }
+
+-- ===================== SPOOKING =====================
+-- Gunfire and explosions near your horse can spook it (decompiled beat_spooked_horse.c): it rears up,
+-- may throw you and bolt. Courage (training + bonding, PA_Courage attribute 3) lowers the chance.
+-- A spooked horse stays skittish until you calm it (rsg-target "Calm Horse", Interaction_PositiveLongAgitated
+-- from rdr3_discoveries tasks/TASK_ANIMAL_INTERACTION) or the timer runs out.
+Config.HorseSpook = {
+    enabled        = true,
+    checkInterval  = 400,    -- ms between checks while riding / near your horse
+    radius         = 25.0,   -- gunfire / explosions within this many metres of the horse count
+    baseChance     = 0.35,   -- chance per scare at courage rank 0
+    minChance      = 0.02,   -- chance never drops below this, even at max courage
+    throwChance    = 0.35,   -- of a spook while ridden: chance the rider is thrown (else it only rears)
+    skittishMult   = 1.75,   -- spook chance multiplier while already skittish
+    cooldown       = 8000,   -- ms between spooks
+    skittishTime   = 120,    -- seconds a spooked horse stays skittish
+    calmedTime     = 90,     -- seconds a calmed horse ignores gunfire
+    bolt = { distance = 40.0, time = 6000 }, -- TASK_SMART_FLEE_PED after throwing its rider
+}
+
+-- ===================== FIELD SALVAGE =====================
+-- When your (uninsured) horse dies out in the world its body stays for a while so you can search
+-- its saddlebags (rsg-target, Interaction_LootSaddleBags) before it's gone (decompiled av_dead_horse.c).
+-- The saddlebags can still be emptied at its stable afterwards.
+Config.HorseSalvage = {
+    enabled  = true,
+    duration = 600,   -- seconds the body stays
+    distance = 3.0,   -- how close you must be to search it
+}
+
+-- ===================== HORSE RACES =====================
+-- Checkpoint races run by a stablehand (decompiled beat_horse_race.c). Pay the entry fee, ride your own
+-- horse through every checkpoint and beat the goal time to win the prize. Best times go on a leaderboard.
+-- Checkpoints are timed and validated on the server (distance + minimum travel time per leg).
+-- Build routes in-game: /raceroute add (at each checkpoint), /raceroute print (prints the config to F8), /raceroute clear.
+Config.HorseRaces = {
+    enabled      = true,
+    routeCommand = 'raceroute', -- admin-only route builder (false to disable)
+    radius       = 8.0,        -- checkpoint trigger radius (m)
+    maxSpeed     = 25.0,       -- m/s; faster legs are rejected as teleports
+    dismountTimeout = 10,      -- seconds off your horse before the race is forfeited
+    leaderboardSize = 5,
+    blip         = { sprite = 'blip_ambient_horse', color = 'BLIP_MODIFIER_MP_COLOR_8' }, -- rdr3_discoveries textures/blips + blip_modifiers
+    races = {
+        -- example: replace the checkpoints with your own route (see /raceroute)
+        -- {
+        --     id = 'valentine_sprint', stable = 'valentine', label = 'Valentine Sprint',
+        --     entryFee = 5, prize = 25, goalTime = 90, timeLimit = 240, cooldown = 600,
+        --     checkpoints = { vector3(0.0, 0.0, 0.0), vector3(0.0, 0.0, 0.0) },
+        -- },
+    },
+}
+

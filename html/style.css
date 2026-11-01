@@ -460,6 +460,7 @@ html, body {
 }
 
 .alert-content {
+  white-space: pre-line;
   color: var(--rdr-text);
   font-size: 15px;
   line-height: 1.5;

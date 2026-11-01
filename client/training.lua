@@ -1,5 +1,5 @@
 -- rsg-stables: horse training (client)
-lib.locale()
+local RSGCore = exports['rsg-core']:GetCoreObject()
 
 -- also applies tack stat bonuses (Config.TackBonuses), so it runs if either feature is on
 local T = Config.Training or {}
@@ -60,7 +60,7 @@ end
 
 local function refresh()
     if not horse or not TRAINING then return end
-    local data = lib.callback.await('rsg-stables:server:getTraining', false)
+    local data = RSGCore.Functions.AwaitCallback('rsg-stables:server:getTraining', nil)
     if data and horse and data.horseId == horse.id then
         horse.training = data
         applyTraining()
@@ -69,7 +69,7 @@ local function refresh()
 end
 
 local function nearStable()
-    local coords = GetEntityCoords(cache.ped)
+    local coords = GetEntityCoords(PlayerPedId())
     for _, stable in ipairs(Config.Stables) do
         for _, p in ipairs({ stable.pedCoords, stable.storeCoords, stable.previewCoords }) do
             if p and #(coords - vector3(p.x, p.y, p.z)) <= T.session.stableDistance then return true end
@@ -82,7 +82,7 @@ local function closeTraining()
     nuiOpen = false
     if activeToken then -- session paid but never finished: settle it so the server frees it
         local tk = activeToken
-        CreateThread(function() lib.callback.await('rsg-stables:server:finishTraining', false, tk, 0) end)
+        CreateThread(function() RSGCore.Functions.AwaitCallback('rsg-stables:server:finishTraining', nil, tk, 0) end)
     end
     activeToken = nil
     SetNuiFocus(false, false)
@@ -102,16 +102,16 @@ end
 
 local function openTraining()
     if not horse or not DoesEntityExist(horse.entity) then
-        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        RSGCore.Functions.Notify({ description = locale('no_active_horse'), type = 'error' })
         return
     end
-    if GetMount(cache.ped) == horse.entity then
-        lib.notify({ description = locale('training_dismount'), type = 'error' })
+    if GetMount(PlayerPedId()) == horse.entity then
+        RSGCore.Functions.Notify({ description = locale('training_dismount'), type = 'error' })
         return
     end
     local data = refresh()
     if not data then
-        lib.notify({ description = locale('no_active_horse'), type = 'error' })
+        RSGCore.Functions.Notify({ description = locale('no_active_horse'), type = 'error' })
         return
     end
     nuiOpen = true
@@ -142,13 +142,13 @@ AddEventHandler('rsg-stables:client:horseSpawned', function(entity, horseRow)
     CreateThread(refresh)
 
     if TRAINING and T.session.enabled then
-        exports.ox_target:addLocalEntity(entity, {
+        exports['rsg-target']:addLocalEntity(entity, {
             {
                 name = 'rsg_stables_train',
                 icon = 'fas fa-horse-head',
                 label = locale('target_train'),
                 distance = 2.5,
-                canInteract = function() return GetMount(cache.ped) ~= entity and nearStable() end,
+                canInteract = function() return GetMount(PlayerPedId()) ~= entity and nearStable() end,
                 onSelect = openTraining,
             },
         })
@@ -177,7 +177,7 @@ if TRAINING and T.riding.enabled then
     CreateThread(function()
         while true do
             Wait(T.riding.interval * 1000)
-            if horse and DoesEntityExist(horse.entity) and GetMount(cache.ped) == horse.entity then
+            if horse and DoesEntityExist(horse.entity) and GetMount(PlayerPedId()) == horse.entity then
                 TriggerServerEvent('rsg-stables:server:trainingRideTick', NetworkGetEntityIsNetworked(horse.entity) and NetworkGetNetworkIdFromEntity(horse.entity) or 0)
             end
         end
@@ -187,15 +187,15 @@ end
 -- ===================== NUI =====================
 RegisterNUICallback('trainingStart', function(data, cb)
     if not (horse and DoesEntityExist(horse.entity)) then cb({ ok = false }) return end
-    local ok, res = lib.callback.await('rsg-stables:server:startTraining', false, data.stat, NetworkGetNetworkIdFromEntity(horse.entity))
+    local ok, res = RSGCore.Functions.AwaitCallback('rsg-stables:server:startTraining', nil, data.stat, NetworkGetNetworkIdFromEntity(horse.entity))
     if not ok then
-        lib.notify({ description = res, type = 'error' })
+        RSGCore.Functions.Notify({ description = res, type = 'error' })
         cb({ ok = false })
         return
     end
     activeToken = res.token
     TaskStandStill(horse.entity, -1)
-    TaskTurnPedToFaceEntity(cache.ped, horse.entity, 2000)
+    TaskTurnPedToFaceEntity(PlayerPedId(), horse.entity, 2000)
     cb({ ok = true, rounds = res.rounds, roundMs = res.roundMs })
 end)
 
@@ -204,9 +204,9 @@ RegisterNUICallback('trainingFinish', function(data, cb)
     activeToken = nil
     if horse and DoesEntityExist(horse.entity) then ClearPedTasks(horse.entity) end
     if not token then cb({ ok = false }) return end
-    local ok, res = lib.callback.await('rsg-stables:server:finishTraining', false, token, data.hits)
+    local ok, res = RSGCore.Functions.AwaitCallback('rsg-stables:server:finishTraining', nil, token, data.hits)
     if not ok then
-        if res then lib.notify({ description = res, type = 'error' }) end
+        if res then RSGCore.Functions.Notify({ description = res, type = 'error' }) end
         cb({ ok = false })
         return
     end
@@ -215,7 +215,7 @@ RegisterNUICallback('trainingFinish', function(data, cb)
         horse.training = res.training
         applyTraining()
     end
-    lib.notify({ title = locale('training_title'), description = locale('training_complete', res.gain, locale('training_' .. res.stat)), type = 'success' })
+    RSGCore.Functions.Notify({ title = locale('training_title'), description = locale('training_complete', res.gain, locale('training_' .. res.stat)), type = 'success' })
     local fresh = refresh()
     cb({ ok = true, data = fresh })
 end)
@@ -230,7 +230,7 @@ AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     if nuiOpen then SetNuiFocus(false, false) end
     if horse and DoesEntityExist(horse.entity) then
-        pcall(function() exports.ox_target:removeLocalEntity(horse.entity, 'rsg_stables_train') end)
+        pcall(function() exports['rsg-target']:removeLocalEntity(horse.entity, 'rsg_stables_train') end)
         for _, attr in pairs(STAT_ATTR) do
             Citizen.InvokeNative(SET_ATTRIBUTE_BONUS_RANK, horse.entity, attr, horse.baseBonus[attr] or 0)
         end

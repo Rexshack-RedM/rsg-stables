@@ -4,10 +4,10 @@ game 'rdr3'
 
 name 'rsg-stables'
 description 'Horse and stables script for RSG Framework'
-version '3.3.2'
+version '3.4.0'
 
 shared_scripts {
-    '@ox_lib/init.lua',
+    '@rsg-core/shared/locale.lua',
     'shared/config.lua',
 }
 
@@ -27,12 +27,14 @@ client_scripts {
     'client/training.lua',
     'client/fence.lua',
     'client/actions.lua',
+    'client/spook.lua',
+    'client/salvage.lua',
+    'client/races.lua',
 }
 
 dependencies {
     'rsg-core',
-    'ox_lib',
-    'ox_target',
+    'rsg-target',
     'oxmysql',
     'rsg-inventory',
 }

@@ -17,11 +17,11 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 - **Horseshoes** – a horse without shoes is noticeably slower and tires faster. Shoes wear down with riding time (faster at a canter or gallop), with warnings as they wear thin. Once fully worn they come off and the horse stays degraded until new shoes are fitted at a stable, which resets the wear (`Config.Horseshoes`). Bought horses and foals come shod; claimed wild horses don't. The horse card shows the current shoe condition.
 - **Coat customisation** – custom tint system (main coat, markings, nose, mane, tail) with quick-pick presets and a flat colour-change fee.
 - **Horse needs** – hunger and thirst decay over time; starving/dehydrated horses lose health, well-fed horses slowly regenerate.
-- **Feeding, watering & brushing** – via ox_target on your active horse, or by using the feed items / brush straight from the inventory (with the hand-feed and brushing animations). The brush also works from the saddle (`Config.HorseBrushMounted`).
-- **Horse actions** – a movable NUI panel (and one command per action) to make your horse **Rest**, **Sleep**, **Graze**, **Roll**, **Rear Up**, **Stay** or **Follow** you. Resting and sleeping slowly restore stamina and health. Uses Rockstar's own horse animations.
+- **Feeding, watering & brushing** – via rsg-target on your active horse, or by using the feed items / brush straight from the inventory (with the hand-feed and brushing animations). The brush also works from the saddle (`Config.HorseBrushMounted`).
+- **Horse actions** – a movable NUI panel (and one command per action) to make your horse **Rest**, **Sleep**, **Graze**, **Roll**, **Rear Up**, **Stay**, **Follow** you or be **Led** by the reins on foot. Resting and sleeping slowly restore stamina and health. Uses Rockstar's own horse animations.
 - **Rear up on command** – press **Q** while riding to rear your horse up without being thrown.
 - **Saddlebags** – each horse has its own rsg-inventory stash (weight and slots set in config), opened from the horse's target menu or the game's own **Horse Cargo (B)** prompt. Optionally (`requireSaddlebags`) the stash only opens when saddlebags are fitted as tack.
-- **Native prompts tidy-up** – the game's own Brush / Feed horse prompts can be hidden so only the ox_target options are used.
+- **Native prompts tidy-up** – the game's own Brush / Feed horse prompts can be hidden so only the rsg-target options are used.
 - **Natural drinking** – horses drink on their own at rivers, lakes and water troughs when thirsty.
 - **Natural grazing** – a hungry horse wanders to hay near you (configurable hay props) and eats.
 - **Hitching posts** – a horse tied at a hitching post doesn't wander off to drink or graze (`Config.HorseHitch`).
@@ -31,12 +31,15 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 - **Horse medicine** – usable item that restores health and refills the health core.
 - **Field revive** – when your horse goes down you have a short window to use a horse reviver before it dies (logging out counts as letting it die).
 - **Tack stat bonuses** – saddles, stirrups, horseshoes and blankets add bonus ranks to health, stamina, speed or acceleration (per category or per item).
-- **Sell horses** – sell a stabled horse back to the stablehand (price based on breed and training).
+- **Sell horses with appraisal** – the stablehand values a stabled horse on breed, condition (health, hunger, thirst), bonding, age and training, plus a bonus if it's shod, and shows the breakdown before you sell (`Config.HorseSell.appraisal`).
 - **Horse fence** – sell wild or stolen (unowned) horses to a fence NPC for blood money; add fence locations in `Config.HorseFence`.
 - **Courage** – trainable, and raised by bonding, so your horse spooks less.
+- **Spooking** – gunfire and explosions near your horse can make it rear up, throw you and bolt. Courage lowers the chance. A spooked horse stays skittish until you **Calm Horse** (rsg-target) or the timer runs out (`Config.HorseSpook`).
+- **Field salvage** – when an uninsured horse dies out in the world its body stays for a while so you can search its saddlebags on the spot (`Config.HorseSalvage`).
+- **Horse races** – checkpoint races run by the stablehands: pay the entry fee, ride your own horse through every checkpoint and beat the goal time for the prize. Timed and validated on the server, with a best-time leaderboard per race (`Config.HorseRaces`). Build routes in-game with `/raceroute`.
 - **Horse training** – ride your horse or pay for training sessions at a stable to level up health, stamina, speed and acceleration.
 - **Horse stimulant** – usable item giving a timed stamina fortify and optional speed boost.
-- **Whistle recall** – whistle (H) to call your horse; it walks up and stops just in front of you, facing you. Teleports closer first if it's too far away, and respawns it if the game has removed it.
+- **Whistle recall** – whistle (H) to call your horse; it walks up and stops just in front of you, facing you. Teleports closer first if it's too far away, and respawns it if the game has removed it. Either way it's placed on open ground (preferring behind you) that isn't inside a building, rock or water and has a clear run to you, falling back to the nearest road (`Config.WhistleSpawnDistance`).
 - **Persistent active horse** – position is saved to the database while out, so it survives logouts and resource restarts.
 - **Flee horse** – send your horse away; optionally return it to the stable automatically.
 - **Wild horses** – break a wild horse with the game's taming minigame, ride it to any stable and choose **Claim Wild Horse** at the stablehand to name it and register it. Validated server-side (breed must be in `Config.Breeds`, you must have broken it, claim window, distance and ownership limits).
@@ -46,6 +49,7 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 - **Store anywhere** – store your active horse at whichever stable you're at (or with `/storehorse`); it's kept there from then on (falls back to its previous stable if that stable is full for you).
 - **Localisation** – en, de, el, es, fr, ja, nl, pl, pt-br, ro.
 - **Auto database setup** – tables are created automatically on resource start.
+- **No ox_lib** – notifications, callbacks, locales and dialogs all run on rsg-core and the resource's own NUI.
 - **Version checker** – notifies you in the server console when an update is available.
 
 ---
@@ -53,8 +57,7 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
 ## Dependencies
 
 - [rsg-core](https://github.com/Rexshack-RedM/rsg-core)
-- [ox_lib](https://github.com/Rexshack-RedM/ox_lib)
-- [ox_target](https://github.com/Rexshack-RedM/ox_target)
+- [rsg-target](https://github.com/Rexshack-RedM/rsg-target)
 - [oxmysql](https://github.com/Rexshack-RedM/oxmysql)
 - [rsg-inventory](https://github.com/Rexshack-RedM/rsg-inventory) (saddlebag stashes)
 
@@ -76,10 +79,9 @@ Horse and stables system for the **RSG Framework** (RedM). Buy, stable, customis
    - `horse_lantern` – saddle lantern, not consumed (**set `useable = true`**)
 4. Ensure the resource in your `server.cfg` **after** its dependencies:
    ```cfg
-   ensure ox_lib
    ensure oxmysql
    ensure rsg-core
-   ensure ox_target
+   ensure rsg-target
    ensure rsg-inventory
    ensure rsg-stables
    ```
@@ -141,7 +143,10 @@ All settings live in `shared/config.lua`.
 | `Config.HorseMedicine` | Item, heal %, refill health core, use distance, cooldown |
 | `Config.HorseReviver` | Item, revive window, use distance, health after revive, bonding lost when the horse goes down |
 | `Config.TackBonuses` | Bonus ranks per tack category (saddle, stirrups, horseshoes, blanket); items can set their own `bonus` |
-| `Config.HorseSell` | Sell back to the stablehand on/off, % of breed price, extra per trained level, minimum price |
+| `Config.HorseSell` | Sell back to the stablehand on/off, % of breed price, extra per trained level, minimum price, and the `appraisal` weights (condition, bonding, age stage, shod bonus) |
+| `Config.HorseSpook` | Spooking on/off, scare radius, base/min chance, throw chance, cooldown, skittish and calmed timers, bolt distance |
+| `Config.HorseSalvage` | Field salvage on/off, how long the body stays, search distance |
+| `Config.HorseRaces` | Races on/off, route builder command, checkpoint radius, max speed check, dismount timeout, leaderboard size, blip and the `races` list (stable, entry fee, prize, goal time, time limit, cooldown, checkpoints) |
 | `Config.HorseFence` | Fence on/off, payout account (`bloodmoney`), % of breed price, cooldown, sell distance, NPC model, blip and `locations` |
 | `Config.Training` | Trainable stats and attributes, XP per level, bonus per level, courage from bonding, ride XP settings and paid stable sessions (price, cooldown, rounds) |
 | `Config.BuyPriceBands` | Price filters in the buy menu |
@@ -178,10 +183,10 @@ All settings live in `shared/config.lua`.
 
 ### Translations
 
-Edit or add a JSON file in `locales/`. The language is chosen by ox_lib, set it in your `server.cfg`:
+Edit or add a JSON file in `locales/`. Locales are loaded by rsg-core (`@rsg-core/shared/locale.lua`). Set the language in your `server.cfg` (falls back to `ox:locale`, then `en`):
 
 ```cfg
-setr ox:locale "en"
+setr rsg:locale "en"
 ```
 
 ---
@@ -189,7 +194,7 @@ setr ox:locale "en"
 ## Usage
 
 ### At the stable
-Walk up to the stablehand and use **ox_target → Manage Stable** to open the menu, where you can:
+Walk up to the stablehand and use **rsg-target → Manage Stable** to open the menu, where you can:
 - **Buy** a horse (filter by class, breed and price).
 - **Take out / store** your horses.
 - **Rename**, **insure**, **revive**, **empty the saddlebags of** or **release** (dead) horses.
@@ -197,12 +202,13 @@ Walk up to the stablehand and use **ox_target → Manage Stable** to open the me
 - **Sell Horse** – sell a stabled horse back to the stablehand.
 - **Breed** a stallion and a mare and collect the foal when ready.
 - **Give to Player** – give or sell a horse to someone standing next to you (empty its saddlebags first).
+- **Horse Races** – shown when the stable has races configured: see the leaderboard and your best time, and start a race (you must be riding your own horse).
 - **Claim Wild Horse** – shown when you've just broken a wild horse and it's with you; name it and it's added to that stable.
 
 Each horse in the list shows its gender, stage (Young / Adult / Old, with days left near the end of its life) and health/stamina.
 
 ### With your active horse
-Target your horse (ox_target) for:
+Target your horse (rsg-target) for:
 - **Feed Horse** – uses a feed item.
 - **Water Horse** – uses a water item.
 - **Brush Horse** – requires the brush item.
@@ -210,6 +216,9 @@ Target your horse (ox_target) for:
 - **Store Horse** – when near a stable.
 - **Train Horse** – paid training session (dismounted, at a stable).
 - **Flee Horse** – sends the horse away.
+- **Calm Horse** – shown while your horse is skittish after being spooked.
+
+If your uninsured horse dies in the world, target its body to **Search Saddlebags** before it disappears.
 - **Horse Actions** – opens the actions panel (drag it by its title to move it; double-click the title to reset).
 - **Open Saddlebags** – opens the horse's own stash (you must be standing next to it; with `requireSaddlebags` the horse must have saddlebags fitted).
 
@@ -227,7 +236,9 @@ Ride an unowned (wild or stolen) horse to a fence NPC from `Config.HorseFence.lo
 | **Q** while riding (`Config.HorseActions.rearKey`) | Rear up |
 | `/horseaction` | Open the horse actions panel |
 | `/horserest`, `/horsesleep`, `/horsegraze`, `/horsewallow`, `/horserear`, `/horsestay`, `/horsefollow` | Run a horse action directly (on foot, near your horse) |
-| `/horsestop` | Stop the current horse action |
+| `/horselead` | Lead your horse by the reins |
+| `/horsestop` | Stop the current horse action (or let go of the reins) |
+| `/raceroute add \| print \| clear` | Admin: build a race route at your position and print it to the F8 console for `Config.HorseRaces.races` |
 
 ### Items
 | Item | Use |
@@ -239,6 +250,25 @@ Ride an unowned (wild or stolen) horse to a fence NPC from `Config.HorseFence.lo
 | `horse_medicine` | Use from inventory near your horse to restore health |
 | `horse_reviver` | Use next to your downed horse within the revive window |
 | `horse_lantern` | Use from inventory next to or riding your horse to fit / remove a saddle lantern (not consumed). It's saved with the horse's tack, so it stays on until removed |
+
+---
+
+## Changelog
+
+### 3.5.0
+- Lead your horse by the reins (`lead` horse action, `/horselead`).
+- Spooking: gunfire and explosions can spook your horse; courage lowers the chance; **Calm Horse** target option.
+- Field salvage: search a dead horse's saddlebags at its body.
+- Horse races with entry fee, prize, goal time, cooldown, server-side checkpoint validation and leaderboard (new table `rsg_stables_races`, created automatically).
+- Sell appraisal: price adjusted by condition, bonding, age and shoes, with a breakdown in the confirm dialog.
+
+### 3.4.0
+- Removed the ox_lib dependency: notifications, callbacks and locales now use rsg-core; the sell and gift confirmation popups use the resource's own NUI dialog.
+- Switched from ox_target to rsg-target.
+- Horse medicine and stimulant are now checked server-side against your active horse's distance (previously usable from anywhere by a modified client).
+- Training sessions check that the target entity is really your horse.
+- Breeding refunds the fee if the breeding record fails to save.
+- Gift offers now wait for the receiver's answer instead of timing out after 10 seconds.
 
 ---
 

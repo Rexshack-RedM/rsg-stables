@@ -60,6 +60,8 @@
   const alertHeader = document.getElementById('alertHeader');
   const alertContent = document.getElementById('alertContent');
   const alertOkBtn = document.getElementById('alertOkBtn');
+  const alertCancelBtn = document.getElementById('alertCancelBtn');
+  let alertIsConfirm = false;
 
   const statsModal = document.getElementById('statsModal');
   const statsHeader = document.getElementById('statsHeader');
@@ -101,7 +103,7 @@
   const ICONS = {
     dollar: '$', mars: '♂', venus: '♀', heart: '♥', foal: 'F', horse: 'H', pen: '✎',
     shield: 'S', route: '⇄', medkit: '+', retrieve: '↑', shirt: '↻',
-    xmark: '✕', filter: '⧩', brush: '✐',
+    xmark: '✕', filter: '⧩', brush: '✐', flag: '⚑', trophy: '★',
   };
 
   function iconGlyph(key) {
@@ -456,14 +458,19 @@
     closeModals();
     alertHeader.textContent = data.header || t('ui_notice');
     alertContent.textContent = data.content || '';
+    // confirm mode (NuiConfirm): Confirm / Cancel buttons instead of a single "Understood"
+    alertIsConfirm = data.confirm === true;
+    alertCancelBtn.classList.toggle('hidden', !alertIsConfirm);
+    alertCancelBtn.textContent = (alertIsConfirm && data.cancelLabel) || t('ui_cancel');
+    alertOkBtn.textContent = alertIsConfirm ? (data.confirmLabel || t('ui_confirm')) : t('ui_understood');
     alertModal.classList.remove('hidden');
     setTimeout(() => alertOkBtn.focus(), 30);
   }
 
-  function closeAlert() {
+  function closeAlert(confirmed) {
     if (alertModal.classList.contains('hidden')) return;
     alertModal.classList.add('hidden');
-    post('alertClose', {});
+    post('alertClose', { confirmed: alertIsConfirm && confirmed === true });
   }
 
   // data = { header, stats: [{ label, value (0-100), suffix }] }. Renders each stat as a
@@ -531,7 +538,8 @@
     if (e.key === 'Escape') cancelInput();
   });
 
-  alertOkBtn.addEventListener('click', closeAlert);
+  alertOkBtn.addEventListener('click', () => closeAlert(true));
+  alertCancelBtn.addEventListener('click', () => closeAlert(false));
   statsOkBtn.addEventListener('click', closeStats);
   closeBtn.addEventListener('click', () => post('close', {}));
 
