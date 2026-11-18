@@ -1,4 +1,6 @@
-Config = {}
+Config = {}
+-- build the database tables automatically on start (set false and import the SQL file for a manual install)
+Config.AutoDatabase = true
 
 -- ===================== GENERAL =====================
 Config.MaxOwnedHorses      = 8      -- max horses a single player can own across all stables

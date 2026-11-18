@@ -302,3 +302,6 @@ If you find this useful, you can support development here: [Buy Me a Coffee](htt
 
 Optional. With `rsg-skills` started, finishing a paid stable training session also awards horsemanship XP (`Config.Skills.TrainingXP`). Ride training does not, to avoid a notification every tick. Set `Config.Skills.Enabled = false` to turn it off.
 
+## Database
+
+Tables (`rsg_stables_horses`, `rsg_stables_breeding`, `rsg_stables_races`) are created automatically on first start while `Config.AutoDatabase = true` (default); the database user needs `CREATE` permission. To install manually, set `Config.AutoDatabase = false` in the config and import `installation/install.sql` once.
