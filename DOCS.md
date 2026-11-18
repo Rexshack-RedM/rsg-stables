@@ -832,3 +832,8 @@ Foal keys: `foal_cannot_ride`, `foal_grown_up` (`%s` = horse name). When adding 
 | Foal is full size / won't grow | Only horses collected from breeding after the update have `born = 1`; check `Config.FoalGrowth.enabled`, or set `applyToPurchased = true` |
 | Other players see a foal full size | The owner's client publishes `rsgFoalScale` on the entity state bag; make sure the horse entity is networked and the other client has `client/foal.lua` running |
 | Fence refuses a horse | Owned horses (state bag `rsgStablesOwned`) are never accepted; add locations to `Config.HorseFence.locations` |
+
+## rsg-skills integration
+
+`Config.Skills = { Enabled, Skill, TrainingXP }`. At the end of `rsg-stables:server:finishTraining`, after the horse's training XP is saved, the server calls `AddXP(src, 'horsemanship', TrainingXP, 'horse training')`. The amount comes from config. The horsemanship `speed_bonus` perk is not applied by rsg-stables. Skipped when rsg-skills is not started.
+

@@ -2601,3 +2601,10 @@ Config.HorseRaces = {
     },
 }
 
+
+-- rsg-skills integration (optional). Needs the rsg-skills resource; does nothing when it is not started.
+Config.Skills = {
+    Enabled    = true,
+    Skill      = 'horsemanship', -- skill key in rsg-skills
+    TrainingXP = 15,             -- XP for finishing a paid stable training session (rsg-skills applies its own multipliers and cap)
+}
