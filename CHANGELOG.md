@@ -2,6 +2,14 @@
 
 All notable changes to rsg-stables. Newest first.
 
+## 3.7.2
+
+### Fixed
+- Scrolling the tack review list with the mouse wheel no longer zooms the preview camera; the wheel only zooms when the list isn't scrollable.
+
+### Changed
+- The purchase row on the tack review screen is now a large, high-contrast confirm button (`variant-confirm`).
+
 ## 3.7.1
 
 ### Fixed

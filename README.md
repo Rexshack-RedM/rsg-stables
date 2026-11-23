@@ -269,6 +269,9 @@ Ride an unowned (wild or stolen) horse to a fence NPC from `Config.HorseFence.lo
 
 ## Changelog
 
+**3.7.2**
+- Tack review screen: the mouse wheel now scrolls the list instead of zooming the preview camera out, and the purchase row is a large, high-contrast confirm button.
+
 **3.7.1**
 - Fixed weekly race prizes failing on Windows servers (`bad argument #1 to 'date'`): the ISO week key no longer uses `os.date('%G-W%V')`.
 

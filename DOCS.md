@@ -602,7 +602,7 @@ Registered with `RegisterNUICallback` in the client scripts and called from the 
 | Callback | File | Purpose |
 |---|---|---|
 | `select`, `close`, `inputSubmit`, `inputCancel`, `alertClose`, `statsClose` | `client.lua` | Menu navigation, name input, alert and stats dialogs |
-| `rotateCam`, `zoomCam` | `client.lua` | Preview camera |
+| `rotateCam`, `zoomCam` | `client.lua` | Preview camera (the NUI skips `zoomCam` while the pointer is over a scrollable list, so the wheel scrolls it) |
 | `tackCycle`, `tackCategoryNav`, `coatUpdate`, `coatAction` | `client.lua` | Tack and coat editors |
 | `horseCardAction`, `horseCardClose` | `client.lua` | Horse card (`/horseinfo`) |
 | `actionsSelect`, `actionsClose` | `actions.lua` | Horse Actions panel |
@@ -871,7 +871,7 @@ Foal keys: `foal_cannot_ride`, `foal_grown_up` (`%s` = horse name). When adding 
 
 ## Technical reference
 
-Generated from the source of **rsg-stables 3.7.1**. Names, arguments and defaults below are read straight from the code.
+Generated from the source of **rsg-stables 3.7.2**. Names, arguments and defaults below are read straight from the code.
 
 ### Dependencies
 
