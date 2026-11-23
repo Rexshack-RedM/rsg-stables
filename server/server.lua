@@ -731,24 +731,32 @@ registerCallback('rsg-stables:server:waterHorse', function(source, horseNetId)
     end
 
     for _, drinkItem in ipairs(Config.HorseDrinkItems) do
-        local owned = Player.Functions.GetItemByName(drinkItem.item)
-        if owned and (owned.amount or 0) > 0 then
-            local removed = Player.Functions.RemoveItem(drinkItem.item, 1, nil, 'rsg-stables-water')
-            if removed then
-                TriggerClientEvent('rsg-inventory:client:ItemBox', source, RSGCore.Shared.Items[drinkItem.item], 'remove', 1)
-                applyDecay(session)
-                session.thirst = math.max(0, math.min(100, session.thirst + (drinkItem.thirst or 0)))
-                if Config.HorseBonding.enabled then
-                    session.bonding = math.max(0, math.min(100, session.bonding + (Config.HorseBonding.waterGain or 0)))
+        local removed = false
+        if drinkItem.canteen then
+            -- rsg-canteen: takes one use from the player's best canteen instead of removing the item
+            removed = GetResourceState('rsg-canteen') == 'started' and exports['rsg-canteen']:ConsumeUse(source) == true
+        else
+            local owned = Player.Functions.GetItemByName(drinkItem.item)
+            if owned and (owned.amount or 0) > 0 then
+                removed = Player.Functions.RemoveItem(drinkItem.item, 1, nil, 'rsg-stables-water')
+                if removed then
+                    TriggerClientEvent('rsg-inventory:client:ItemBox', source, RSGCore.Shared.Items[drinkItem.item], 'remove', 1)
                 end
-                session.lastWaterAt = now
-                return true, {
-                    label = drinkItem.label,
-                    stamina = drinkItem.stamina,
-                    thirst = session.thirst,
-                    bonding = session.bonding,
-                }
             end
+        end
+        if removed then
+            applyDecay(session)
+            session.thirst = math.max(0, math.min(100, session.thirst + (drinkItem.thirst or 0)))
+            if Config.HorseBonding.enabled then
+                session.bonding = math.max(0, math.min(100, session.bonding + (Config.HorseBonding.waterGain or 0)))
+            end
+            session.lastWaterAt = now
+            return true, {
+                label = drinkItem.label,
+                stamina = drinkItem.stamina,
+                thirst = session.thirst,
+                bonding = session.bonding,
+            }
         end
     end
 

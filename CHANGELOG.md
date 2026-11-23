@@ -2,6 +2,11 @@
 
 All notable changes to rsg-stables. Newest first.
 
+## 3.7.3
+
+### Added
+- Water Horse can use a canteen from `rsg-canteen` (one use per watering) when no water bucket is available. `Config.HorseDrinkItems` entries with `canteen = true` call `exports['rsg-canteen']:ConsumeUse`.
+
 ## 3.7.2
 
 ### Fixed
