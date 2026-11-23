@@ -1,3 +1,12 @@
+-- ISO-8601 week key (e.g. 2026-W47), UTC. Pure Lua: os.date %G/%V are unsupported on Windows servers.
+local function weekKey(t)
+    local d = os.date('!*t', t or os.time())
+    local wday = (d.wday + 5) % 7 + 1                 -- Monday=1 .. Sunday=7
+    local nearThu = (t or os.time()) + (4 - wday) * 86400 -- Thursday of this ISO week
+    local th = os.date('!*t', nearThu)
+    local year = th.year
+    return ('%d-W%02d'):format(year, math.floor((th.yday - 1) / 7) + 1)
+end
 local RSGCore = exports['rsg-core']:GetCoreObject()
 
 -- rsg-core server callback with return-style handlers: fn(source, ...) returns the reply values.
@@ -2306,7 +2315,7 @@ registerCallback('rsg-stables:server:raceCheckpoint', function(source, idx)
         MySQL.insert.await([[
             INSERT INTO rsg_stables_race_weekly (citizenid, race, week, best_ms) VALUES (?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE best_ms = LEAST(best_ms, VALUES(best_ms))
-        ]], { cid, race.id, os.date('!%G-W%V'), ms })
+        ]], { cid, race.id, weekKey(), ms })
     end
     return true, { finished = true, ms = ms, won = won == true, prize = prize, newBest = newBest }
 end)
@@ -2325,7 +2334,6 @@ end
 -- ===================== WEEKLY RACE PRIZES =====================
 -- Each race has a weekly (Monday-Sunday, UTC) leaderboard. When a week ends the fastest riders win Config.HorseRaces.weekly.prizes.
 -- Winnings go into rsg_stables_prizes and are paid out to the player when online (right away or on their next login).
-local function weekKey(t) return os.date('!%G-W%V', t or os.time()) end
 
 local function deliverPrizes(src)
     local Player = RSGCore.Functions.GetPlayer(src)

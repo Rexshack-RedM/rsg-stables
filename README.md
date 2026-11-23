@@ -269,6 +269,9 @@ Ride an unowned (wild or stolen) horse to a fence NPC from `Config.HorseFence.lo
 
 ## Changelog
 
+**3.7.1**
+- Fixed weekly race prizes failing on Windows servers (`bad argument #1 to 'date'`): the ISO week key no longer uses `os.date('%G-W%V')`.
+
 **3.7.0**
 - Transfer fee + travel time, boarding fees, ownership history and brands (`/horserecord`), saddlebag weight upgrades, weekly race prizes, and a server-verified flee-store (`fleeStart`). New config blocks: `Config.Transfer`, `Config.Boarding`, `Config.HorseRecords`, `Config.HorseInventory.weightPerStyle/slotsPerStyle`, `Config.HorseRaces.weekly`.
 

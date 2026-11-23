@@ -871,7 +871,7 @@ Foal keys: `foal_cannot_ride`, `foal_grown_up` (`%s` = horse name). When adding 
 
 ## Technical reference
 
-Generated from the source of **rsg-stables 3.7.0**. Names, arguments and defaults below are read straight from the code.
+Generated from the source of **rsg-stables 3.7.1**. Names, arguments and defaults below are read straight from the code.
 
 ### Dependencies
 

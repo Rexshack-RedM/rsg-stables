@@ -2,6 +2,11 @@
 
 All notable changes to rsg-stables. Newest first.
 
+## 3.7.1
+
+### Fixed
+- Fixed weekly race prizes failing on Windows servers (`bad argument #1 to 'date'`): the ISO week key no longer uses `os.date('%G-W%V')`.
+
 ## 3.7.0
 
 ### Added
